@@ -1,10 +1,3 @@
-// Ojarun — Prisma schema (Phase 1, slim)
-//
-// Five tables only. The website and mobile app will add their own tables
-// later (addresses, payments, conversations, etc.) — but the core entities
-// here stay exactly the same. The `channel` column on orders is the key
-// future-proofing: web and app will insert into this same table.
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -12,7 +5,114 @@ generator client {
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL") // Supabase: pooled URL for runtime, direct URL for migrations
+  directUrl = env("DIRECT_URL")
+}
+
+model Customer {
+  id             String         @id @default(uuid()) @db.Uuid
+  whatsappNumber String         @unique @map("whatsapp_number")
+  name           String?
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  conversations  conversations?
+  messages       Message[]
+  orders         Order[]
+
+  @@map("customers")
+}
+
+model Product {
+  id           String      @id @default(uuid()) @db.Uuid
+  name         String
+  unit         String
+  currentPrice Decimal     @map("current_price") @db.Decimal(12, 2)
+  isAvailable  Boolean     @default(true) @map("is_available")
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  orderItems   OrderItem[]
+
+  @@map("products")
+}
+
+model Order {
+  id            String      @id @default(uuid()) @db.Uuid
+  customerId    String      @map("customer_id") @db.Uuid
+  channel       Channel     @default(whatsapp)
+  status        OrderStatus @default(pending)
+  total         Decimal     @default(0) @db.Decimal(12, 2)
+  customerNotes String?     @map("customer_notes")
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  items         OrderItem[]
+  customer      Customer    @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+  @@index([status])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                  String   @id @default(uuid()) @db.Uuid
+  orderId             String   @map("order_id") @db.Uuid
+  productId           String?  @map("product_id") @db.Uuid
+  productNameSnapshot String   @map("product_name_snapshot")
+  unitSnapshot        String   @map("unit_snapshot")
+  unitPriceSnapshot   Decimal  @map("unit_price_snapshot") @db.Decimal(12, 2)
+  quantity            Decimal  @db.Decimal(12, 3)
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  order               Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product             Product? @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model Message {
+  id                String           @id @default(uuid()) @db.Uuid
+  customerId        String           @map("customer_id") @db.Uuid
+  whatsappMessageId String?          @unique @map("whatsapp_message_id")
+  direction         MessageDirection
+  body              String?
+  raw               Json
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  customer          Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, createdAt])
+  @@map("messages")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model conversations {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customer_id String           @unique @db.Uuid
+  mode        ConversationMode @default(bot)
+  state       Json             @default("{}")
+  created_at  DateTime         @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime         @default(now()) @db.Timestamptz(6)
+  customers   Customer         @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([customer_id])
+}
+
+model BotResponse {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key       String   @unique
+  body      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("bot_responses")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model PendingOrder {
+  id         String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  phone      String    @unique
+  startedAt  DateTime  @default(now()) @map("started_at") @db.Timestamptz(6)
+  remindedAt DateTime? @map("reminded_at") @db.Timestamptz(6)
+  completed  Boolean   @default(false)
+
+  @@map("pending_orders")
 }
 
 enum Channel {
@@ -36,88 +136,7 @@ enum MessageDirection {
   outbound
 }
 
-// ─── Customers ─────────────────────────────────────────────────────────────────
-
-model Customer {
-  id             String   @id @default(uuid()) @db.Uuid
-  whatsappNumber String   @unique @map("whatsapp_number") // E.164, e.g. +2348012345678
-  name           String?
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  orders   Order[]
-  messages Message[]
-
-  @@map("customers")
-}
-
-// ─── Products ──────────────────────────────────────────────────────────────────
-
-model Product {
-  id           String   @id @default(uuid()) @db.Uuid
-  name         String
-  unit         String // kg, paint bucket, tuber, bag, bunch...
-  currentPrice Decimal  @map("current_price") @db.Decimal(12, 2)
-  isAvailable  Boolean  @default(true) @map("is_available")
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  orderItems OrderItem[]
-
-  @@map("products")
-}
-
-// ─── Orders ────────────────────────────────────────────────────────────────────
-
-model Order {
-  id            String      @id @default(uuid()) @db.Uuid
-  customerId    String      @map("customer_id") @db.Uuid
-  channel       Channel     @default(whatsapp) // future-proofs site/app
-  status        OrderStatus @default(pending)
-  total         Decimal     @default(0) @db.Decimal(12, 2)
-  customerNotes String?     @map("customer_notes")
-  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  customer Customer    @relation(fields: [customerId], references: [id])
-  items    OrderItem[]
-
-  @@index([customerId])
-  @@index([status])
-  @@map("orders")
-}
-
-model OrderItem {
-  id                  String  @id @default(uuid()) @db.Uuid
-  orderId             String  @map("order_id") @db.Uuid
-  productId           String? @map("product_id") @db.Uuid
-  // Snapshot fields — never compute historical totals from current products.
-  productNameSnapshot String  @map("product_name_snapshot")
-  unitSnapshot        String  @map("unit_snapshot")
-  unitPriceSnapshot   Decimal @map("unit_price_snapshot") @db.Decimal(12, 2)
-  quantity            Decimal @db.Decimal(12, 3) // allows half-bag etc.
-  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product Product? @relation(fields: [productId], references: [id])
-
-  @@index([orderId])
-  @@map("order_items")
-}
-
-// ─── Messages (every WhatsApp message in or out) ──────────────────────────────
-
-model Message {
-  id                String           @id @default(uuid()) @db.Uuid
-  customerId        String           @map("customer_id") @db.Uuid
-  whatsappMessageId String?          @unique @map("whatsapp_message_id") // Meta's wamid; UNIQUE for idempotency
-  direction         MessageDirection
-  body              String? // text content (or null for media — store payload in raw)
-  raw               Json // full Meta payload for debugging
-  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
-  @@index([customerId, createdAt])
-  @@map("messages")
+enum ConversationMode {
+  bot
+  human
 }
