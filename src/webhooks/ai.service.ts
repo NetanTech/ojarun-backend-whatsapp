@@ -11,17 +11,36 @@ export class AiService {
 
   async chat(userMessage: string, history: ChatMessage[] = []): Promise<string | null> {
     const provider = this.config.get<string>('ai.provider');
+    const text = userMessage.trim().toUpperCase();
+
+    // Programmatic Intent Guardrails: Intercept greetings and cooking requests 
+    // to bypass restrictive down-stream system prompt classifications
+    if (text === 'HEYY' || text === 'HELLO' || text === 'HI' || text === 'HOW FAR') {
+      return `Aba! 👋 Welcome to OjaRun market service. I dey! Drop your shopping list here make we run your market errands for Ibadan sharp-sharp! Wetin you wan buy today?`;
+    }
+
+    if (text.includes('HOW TO COOK') || text.includes('RECIPE') || text.includes('PREPARE')) {
+      this.logger.log(`Cooking/Recipe query detected. Routing through LLM...`);
+    }
 
     try {
+      let response: string | null = null;
       switch (provider) {
-        case 'anthropic': return await this.callAnthropic(userMessage, history);
-        case 'groq':      return await this.callGroq(userMessage, history);
-        case 'openai':    return await this.callOpenAI(userMessage, history);
-        case 'gemini':    return await this.callGemini(userMessage, history);
+        case 'anthropic': response = await this.callAnthropic(userMessage, history); break;
+        case 'groq':      response = await this.callGroq(userMessage, history); break;
+        case 'openai':    response = await this.callOpenAI(userMessage, history); break;
+        case 'gemini':    response = await this.callGemini(userMessage, history); break;
         default:
           this.logger.error(`Unknown AI provider: ${provider}`);
           return null;
       }
+
+      // Safeguard fallback: Clean out aggressive short-circuit tokens if returned by the model
+      if (response && (response.trim() === 'Not_food' || response.trim() === 'NOT_FOOD')) {
+        return `I can help you with that! Tell me the items or ingredients you want from the market, and I will compile your order list right away.`;
+      }
+
+      return response;
     } catch (err) {
       this.logger.error('AI chat failed', err);
       return null;
@@ -129,7 +148,7 @@ export class AiService {
       },
       body: JSON.stringify({
         model: this.config.get<string>('ai.model'),
-        max_tokens: 1000, // Safe buffer for tool calling payloads
+        max_tokens: 1000,
         system: this.systemPrompt(),
         messages: [...history, { role: 'user', content: userMessage }],
         tools: this.getAnthropicTools(),
@@ -226,7 +245,6 @@ export class AiService {
     const apiKey = this.config.get<string>('ai.apiKey');
     const model = this.config.get<string>('ai.model');
     
-    // Process history to align strictly with Gemini alternation requirements
     const rawContents = [
       ...history.map((m) => ({
         role: m.role === 'assistant' ? 'model' : 'user',
@@ -235,15 +253,13 @@ export class AiService {
       { role: 'user', parts: [{ text: userMessage }] },
     ];
 
-    // Filter logic ensuring strict alternation and a user-first structure
     const contents: any[] = [];
     for (const msg of rawContents) {
       if (contents.length === 0 && msg.role !== 'user') {
-        continue; // Skip any prepended model responses if they hit first
+        continue;
       }
       const lastMsg = contents[contents.length - 1];
       if (lastMsg && lastMsg.role === msg.role) {
-        // Append text together if identical roles happen consecutively
         lastMsg.parts[0].text += `\n${msg.parts[0].text}`;
       } else {
         contents.push(msg);
