@@ -87,16 +87,25 @@ export class WebhooksController {
     const isNewCustomer = !customer.createdAt;
     const bodyText = msg.type === "text" ? (msg.text?.body ?? null) : null;
 
-    // 3. Save incoming message to log timeline
-    await this.prisma.message.create({
-      data: {
-        customerId: customer.id,
-        whatsappMessageId: wamid,
-        direction: MessageDirection.inbound,
-        body: bodyText,
-        raw: msg as Prisma.InputJsonValue,
-      },
-    });
+    // 3. Save incoming message to log timeline safely
+    try {
+      await this.prisma.message.create({
+        data: {
+          customerId: customer.id,
+          whatsappMessageId: wamid,
+          direction: MessageDirection.inbound,
+          body: bodyText,
+          raw: msg as Prisma.InputJsonValue,
+        },
+      });
+    } catch (error) {
+      // Catch fast-retry race condition requests hitting before the first write finishes
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        this.logger.debug(`Caught race-condition duplicate via unique constraint: wamid=${wamid}`);
+        return; // Gracefully drop execution thread to give Meta a 200 OK success acknowledgement
+      }
+      throw error; // Propagate any non-idempotency structural errors transparently
+    }
 
     this.logger.log(`Inbound [${whatsappNumber}]: ${bodyText ?? `[${msg.type}]`}`);
 
