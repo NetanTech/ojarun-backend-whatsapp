@@ -13,14 +13,24 @@ export class AiService {
     const provider = this.config.get<string>('ai.provider');
     const text = userMessage.trim().toUpperCase();
 
-    // Programmatic Intent Guardrails: Intercept greetings and cooking requests 
-    // to bypass restrictive down-stream system prompt classifications
-    if (text === 'HEYY' || text === 'HELLO' || text === 'HI' || text === 'HOW FAR') {
-      return `Aba! 👋 Welcome to OjaRun market service. I dey! Drop your shopping list here make we run your market errands for Ibadan sharp-sharp! Wetin you wan buy today?`;
+    // 1. Array of mixed, highly localized dynamic greetings
+    const dynamicGreetings = [
+      `Aba! 👋 Welcome to OjaRun! I dey here sharp-sharp to run your market errands for Ibadan. Drop your shopping list or let me know wetin you wan buy today! 🛍️`,
+      `How far! 👋 OjaRun dey here for you. Tell me wetin you wan buy from market today make we go help you buy am sharp-sharp! 🍅`,
+      `Oya let's go! 🚀 Welcome to OjaRun. Wetin we dey buy from Ibadan market today? Just drop the list make I arrange am for you.`,
+      `Aba, how body? 👋 OjaRun service active! Drop your market list here make we run the errand for you sharp-sharp! 🛒`
+    ];
+
+    // 2. Only intercept greetings if there's no active conversation history
+    // If they are already talking about ingredients, let the LLM handle it using context!
+    const greetingWords = ['HEYY', 'HEY', 'HELLO', 'HI', 'HOW FAR', 'YO', 'AFA', 'AOFA', 'YO YO YO'];
+    if (history.length === 0 && (greetingWords.includes(text) || greetingWords.some(g => text.startsWith(g + ' ')))) {
+      const randomIndex = Math.floor(Math.random() * dynamicGreetings.length);
+      return dynamicGreetings[randomIndex];
     }
 
-    if (text.includes('HOW TO COOK') || text.includes('RECIPE') || text.includes('PREPARE')) {
-      this.logger.log(`Cooking/Recipe query detected. Routing through LLM...`);
+    if (text.includes('HOW TO COOK') || text.includes('RECIPE') || text.includes('PREPARE') || text.includes('PEPPER SOUP')) {
+      this.logger.log(`Food-related intent recognized. Processing with chat history context...`);
     }
 
     try {
@@ -35,9 +45,9 @@ export class AiService {
           return null;
       }
 
-      // Safeguard fallback: Clean out aggressive short-circuit tokens if returned by the model
+      // Localized fallback safeguard if the model gets strict or confused
       if (response && (response.trim() === 'Not_food' || response.trim() === 'NOT_FOOD')) {
-        return `I can help you with that! Tell me the items or ingredients you want from the market, and I will compile your order list right away.`;
+        return `No p, I dey for you! 🤝 Just list the things or ingredients you need from market, or tell me wetin you wan cook make I help you arrange the shopping list sharp-sharp!`;
       }
 
       return response;
