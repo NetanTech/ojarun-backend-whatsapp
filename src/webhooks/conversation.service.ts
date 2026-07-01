@@ -63,7 +63,7 @@ export class ConversationService {
    * folds it into Customer.contextSummary — so even a brand new conversation
    * benefits from what was learned before (delivery area, usual items, etc.).
    */
-  @Cron(CronExpression.EVERY_15_MINUTES)
+  @Cron('0 */15 * * * *') // every 15 minutes
   async summarizeStaleConversations(): Promise<void> {
     const cutoff = new Date(Date.now() - this.idleMinutes * 60 * 1000);
 
