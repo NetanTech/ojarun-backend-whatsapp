@@ -9,14 +9,17 @@ datasource db {
 }
 
 model Customer {
-  id             String         @id @default(uuid()) @db.Uuid
-  whatsappNumber String         @unique @map("whatsapp_number")
-  name           String?
-  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
-  conversations  conversations?
-  messages       Message[]
-  orders         Order[]
+  id                      String         @id @default(uuid()) @db.Uuid
+  whatsappNumber          String         @unique @map("whatsapp_number")
+  name                    String?
+  createdAt               DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  conversations           conversations?
+  messages                Message[]
+  orders                  Order[]
+  chatSessions            ChatSession[]
+  contextSummary          String?        @map("context_summary")
+  contextSummaryUpdatedAt DateTime?      @map("context_summary_updated_at") @db.Timestamptz(6)
 
   @@map("customers")
 }
@@ -70,14 +73,17 @@ model OrderItem {
 model Message {
   id                String           @id @default(uuid()) @db.Uuid
   customerId        String           @map("customer_id") @db.Uuid
+  sessionId         String?          @map("session_id") @db.Uuid
   whatsappMessageId String?          @unique @map("whatsapp_message_id")
   direction         MessageDirection
   body              String?
   raw               Json
   createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   customer          Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  session           ChatSession?     @relation(fields: [sessionId], references: [id])
 
   @@index([customerId, createdAt])
+  @@index([sessionId, createdAt])
   @@map("messages")
 }
 
@@ -92,6 +98,24 @@ model conversations {
   customers   Customer         @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([customer_id])
+}
+
+/// Per-session message grouping for AI context + a rolling customer summary.
+/// Distinct from `conversations` above, which is a bot/human handoff toggle.
+model ChatSession {
+  id             String            @id @default(uuid()) @db.Uuid
+  customerId     String            @map("customer_id") @db.Uuid
+  customer       Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  status         ChatSessionStatus @default(active)
+  startedAt      DateTime          @default(now()) @map("started_at") @db.Timestamptz(6)
+  lastActivityAt DateTime          @default(now()) @map("last_activity_at") @db.Timestamptz(6)
+  closedAt       DateTime?         @map("closed_at") @db.Timestamptz(6)
+  summary        String?
+  messages       Message[]
+
+  @@index([customerId, status])
+  @@index([lastActivityAt])
+  @@map("chat_sessions")
 }
 
 model BotResponse {
@@ -139,4 +163,9 @@ enum MessageDirection {
 enum ConversationMode {
   bot
   human
+}
+
+enum ChatSessionStatus {
+  active
+  closed
 }
