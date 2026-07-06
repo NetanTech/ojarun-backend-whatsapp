@@ -16,6 +16,7 @@ import { WhatsappSignatureGuard } from "./signature.guard";
 import { getDeliveryWindow } from "./delivery.util";
 import { AiService } from "./ai.service";
 import { ConversationService } from "./conversation.service";
+import { EmailService } from "./email.service";
 
 @Controller("webhooks/whatsapp")
 export class WebhooksController {
@@ -27,6 +28,7 @@ export class WebhooksController {
     private readonly whatsapp: WhatsappService,
     private readonly ai: AiService,
     private readonly conversations: ConversationService,
+    private readonly email: EmailService,
   ) {}
 
   @Get()
@@ -160,27 +162,62 @@ export class WebhooksController {
     if (replyKey === "default" && bodyText) {
       const aiResult = await this.ai.chat(bodyText, formattedHistory, customer.contextSummary ?? null);
 
-      if (aiResult?.type === "order") {
-        await this.prisma.$transaction(async (tx) => {
+      if (aiResult?.type === "draft_update") {
+        const { items, deliveryAddress } = await this.conversations.mergeDraft(
+          conversation.id,
+          aiResult.items,
+          aiResult.deliveryAddress,
+        );
+
+        let draftSummary = `Noted! Here's your list so far:\n\n`;
+        items.forEach((item) => {
+          draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
+        });
+        draftSummary += deliveryAddress
+          ? `\n📍 Delivery to: ${deliveryAddress}`
+          : `\n⚠️ Still need your delivery address — just drop it whenever you're ready.`;
+        draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
+
+        await this.sendAndLog(customer.id, conversation.id, whatsappNumber, draftSummary);
+        return;
+      }
+
+      if (aiResult?.type === "confirm_order") {
+        // The draft (not anything the model just said) is the source of
+        // truth here — it was built up incrementally across every
+        // update_order_items call, so it can't be missing earlier items.
+        const draft = await this.conversations.getDraft(conversation.id);
+
+        if (draft.items.length === 0) {
+          await this.sendAndLog(
+            customer.id,
+            conversation.id,
+            whatsappNumber,
+            `You never tell me wetin you wan buy yet 🙏 — just drop your list and we go start!`,
+          );
+          return;
+        }
+
+        const createdOrder = await this.prisma.$transaction(async (tx) => {
           await tx.pendingOrder.updateMany({
             where: { phone: whatsappNumber, completed: false },
             data: { completed: true },
           });
 
-          const createdOrder = await tx.order.create({
+          const order = await tx.order.create({
             data: {
               customerId: customer.id,
               channel: Channel.whatsapp,
               status: OrderStatus.pending,
               total: new Prisma.Decimal(0.0),
-              customerNotes: aiResult.deliveryAddress,
+              customerNotes: draft.deliveryAddress,
             },
           });
 
-          for (const item of aiResult.items) {
+          for (const item of draft.items) {
             await tx.orderItem.create({
               data: {
-                orderId: createdOrder.id,
+                orderId: order.id,
                 productId: null,
                 productNameSnapshot: item.name,
                 unitSnapshot: item.unit,
@@ -189,17 +226,32 @@ export class WebhooksController {
               },
             });
           }
+
+          return order;
         });
+
+        await this.conversations.clearDraft(conversation.id);
 
         this.logger.log(`Order processed transactionally for ${whatsappNumber}`);
 
+        // Fire-and-forget — EmailService catches its own errors, so a broken
+        // mail provider can never delay or block the customer's confirmation.
+        void this.email.sendNewOrderNotification({
+          orderId: createdOrder.id,
+          customerName: customer.name,
+          whatsappNumber,
+          items: draft.items,
+          deliveryAddress: draft.deliveryAddress,
+          createdAt: createdOrder.createdAt,
+        });
+
         let customerInvoiceReceipt = `E don set! 🔥 I have compiled your OjaRun market order list:\n\n`;
-        aiResult.items.forEach((item) => {
+        draft.items.forEach((item) => {
           customerInvoiceReceipt += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
         });
 
-        if (aiResult.deliveryAddress) {
-          customerInvoiceReceipt += `\n📍 *Delivery to:* ${aiResult.deliveryAddress}`;
+        if (draft.deliveryAddress) {
+          customerInvoiceReceipt += `\n📍 *Delivery to:* ${draft.deliveryAddress}`;
         } else {
           customerInvoiceReceipt += `\n⚠️ We no get your delivery address yet — abeg reply with your address so we fit deliver am!`;
         }

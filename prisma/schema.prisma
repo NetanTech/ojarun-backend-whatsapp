@@ -103,15 +103,17 @@ model conversations {
 /// Per-session message grouping for AI context + a rolling customer summary.
 /// Distinct from `conversations` above, which is a bot/human handoff toggle.
 model ChatSession {
-  id             String            @id @default(uuid()) @db.Uuid
-  customerId     String            @map("customer_id") @db.Uuid
-  customer       Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  status         ChatSessionStatus @default(active)
-  startedAt      DateTime          @default(now()) @map("started_at") @db.Timestamptz(6)
-  lastActivityAt DateTime          @default(now()) @map("last_activity_at") @db.Timestamptz(6)
-  closedAt       DateTime?         @map("closed_at") @db.Timestamptz(6)
-  summary        String?
-  messages       Message[]
+  id                   String            @id @default(uuid()) @db.Uuid
+  customerId           String            @map("customer_id") @db.Uuid
+  customer             Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  status               ChatSessionStatus @default(active)
+  startedAt            DateTime          @default(now()) @map("started_at") @db.Timestamptz(6)
+  lastActivityAt       DateTime          @default(now()) @map("last_activity_at") @db.Timestamptz(6)
+  closedAt             DateTime?         @map("closed_at") @db.Timestamptz(6)
+  summary              String?
+  draftItems           Json?             @map("draft_items")
+  draftDeliveryAddress String?           @map("draft_delivery_address")
+  messages             Message[]
 
   @@index([customerId, status])
   @@index([lastActivityAt])

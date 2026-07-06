@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
-import { ChatSessionStatus } from '@prisma/client';
+import { ChatSessionStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { AiService } from './ai.service';
+import { AiService, OrderDraftItem } from './ai.service';
 
 const DEFAULT_IDLE_MINUTES = 360; // 6 hours of no messages = new conversation next time
 
@@ -54,6 +54,58 @@ export class ConversationService {
     await this.prisma.chatSession.update({
       where: { id: conversationId },
       data: { lastActivityAt: new Date() },
+    });
+  }
+
+  /**
+   * Merges newly-mentioned items into the session's running draft — matched
+   * by case-insensitive name, so a repeated mention of an item updates its
+   * quantity/unit rather than duplicating it. This is what lets the AI just
+   * report what changed each turn instead of restating the whole list.
+   */
+  async mergeDraft(
+    sessionId: string,
+    incomingItems: OrderDraftItem[],
+    deliveryAddress: string | null,
+  ): Promise<{ items: OrderDraftItem[]; deliveryAddress: string | null }> {
+    const session = await this.prisma.chatSession.findUniqueOrThrow({ where: { id: sessionId } });
+    const existingItems = (session.draftItems as unknown as OrderDraftItem[] | null) ?? [];
+
+    const merged = [...existingItems];
+    for (const incoming of incomingItems) {
+      const idx = merged.findIndex((m) => m.name.toLowerCase() === incoming.name.toLowerCase());
+      if (idx >= 0) {
+        merged[idx] = incoming;
+      } else {
+        merged.push(incoming);
+      }
+    }
+
+    const updatedAddress = deliveryAddress ?? session.draftDeliveryAddress ?? null;
+
+    await this.prisma.chatSession.update({
+      where: { id: sessionId },
+      data: {
+        draftItems: merged as unknown as Prisma.InputJsonValue,
+        draftDeliveryAddress: updatedAddress,
+      },
+    });
+
+    return { items: merged, deliveryAddress: updatedAddress };
+  }
+
+  async getDraft(sessionId: string): Promise<{ items: OrderDraftItem[]; deliveryAddress: string | null }> {
+    const session = await this.prisma.chatSession.findUniqueOrThrow({ where: { id: sessionId } });
+    return {
+      items: (session.draftItems as unknown as OrderDraftItem[] | null) ?? [],
+      deliveryAddress: session.draftDeliveryAddress ?? null,
+    };
+  }
+
+  async clearDraft(sessionId: string): Promise<void> {
+    await this.prisma.chatSession.update({
+      where: { id: sessionId },
+      data: { draftItems: Prisma.JsonNull, draftDeliveryAddress: null },
     });
   }
 

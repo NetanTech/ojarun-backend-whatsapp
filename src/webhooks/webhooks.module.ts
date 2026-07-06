@@ -6,10 +6,11 @@ import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { ReminderService } from './reminder.service';
 import { AiService } from './ai.service';
 import { ConversationService } from './conversation.service';
+import { EmailService } from './email.service';
 
 @Module({
   imports: [WhatsappModule, ScheduleModule.forRoot()],
   controllers: [WebhooksController],
-  providers: [WhatsappSignatureGuard, ReminderService, AiService, ConversationService],
+  providers: [WhatsappSignatureGuard, ReminderService, AiService, ConversationService, EmailService],
 })
 export class WebhooksModule {}

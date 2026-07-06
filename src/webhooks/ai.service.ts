@@ -11,7 +11,8 @@ export type OrderDraftItem = {
 
 export type AiChatResult =
   | { type: 'text'; content: string }
-  | { type: 'order'; items: OrderDraftItem[]; deliveryAddress: string | null };
+  | { type: 'draft_update'; items: OrderDraftItem[]; deliveryAddress: string | null }
+  | { type: 'confirm_order' };
 
 const FETCH_TIMEOUT_MS = 20_000;
 
@@ -75,7 +76,7 @@ export class AiService {
       }
 
       if (!result) return null;
-      if (result.type === 'order') return result;
+      if (result.type !== 'text') return result;
 
       const trimmed = result.content.trim();
       if (trimmed === 'Not_food' || trimmed === 'NOT_FOOD') {
@@ -178,8 +179,17 @@ export class AiService {
 
   private systemPrompt(customerContext: string | null): string {
     const base = this.config.get<string>('ai.systemPrompt') ?? 'You are a helpful assistant.';
-    if (!customerContext) return base;
-    return `${base}\n\nWhat you remember about this returning customer from past conversations:\n${customerContext}\n\nUse this only where it's actually relevant — don't force it into every reply.`;
+
+    const orderingProtocol =
+      `\n\nOrdering protocol — follow this exactly:\n` +
+      `- Whenever the customer mentions an item they want (new, or a change to an existing item's quantity/unit), call update_order_items with just that item or items. You do NOT need to repeat items from earlier in the conversation — the system keeps the running list for you.\n` +
+      `- If the customer gives a delivery address/location at any point, include it as deliveryAddress in that same call.\n` +
+      `- Never call confirm_order until the customer has explicitly confirmed they're done and ready (e.g. "yes", "that's all", "go ahead", "confirm"). Keep using update_order_items as the list grows before that.\n` +
+      `- confirm_order takes no item arguments — the system already has the full list from your update_order_items calls.`;
+
+    const withProtocol = `${base}${orderingProtocol}`;
+    if (!customerContext) return withProtocol;
+    return `${withProtocol}\n\nWhat you remember about this returning customer from past conversations:\n${customerContext}\n\nUse this only where it's actually relevant — don't force it into every reply.`;
   }
 
   private getMarketTools() {
@@ -187,15 +197,15 @@ export class AiService {
       {
         type: 'function',
         function: {
-          name: 'create_market_order',
+          name: 'update_order_items',
           description:
-            'Call this function ONLY when the customer explicitly agrees, gives confirmation, or says yes to completing their market order list.',
+            'Call this whenever the customer mentions an item to buy — new items, or a change to an existing one. Only include what changed this turn; the system merges it into the running list for you.',
           parameters: {
             type: 'object',
             properties: {
               items: {
                 type: 'array',
-                description: 'Clean list of foodstuff and market items with resolved names, numeric quantities, and units.',
+                description: 'Items mentioned or changed this turn — not the full running list.',
                 items: {
                   type: 'object',
                   properties: {
@@ -216,12 +226,20 @@ export class AiService {
               },
               deliveryAddress: {
                 type: 'string',
-                description:
-                  'The customer\'s delivery address or location exactly as they described it, e.g. "Soka, Ibadan" or "Bodija, near UI second gate". Omit this field if no location was mentioned anywhere in the conversation.',
+                description: 'The customer\'s delivery address, only if newly mentioned this turn. Omit otherwise.',
               },
             },
             required: ['items'],
           },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'confirm_order',
+          description:
+            'Call this ONLY when the customer has explicitly confirmed they are done adding items and ready to place the order. Takes no arguments — the system already has the full list.',
+          parameters: { type: 'object', properties: {} },
         },
       },
     ];
@@ -230,14 +248,15 @@ export class AiService {
   private getAnthropicTools() {
     return [
       {
-        name: 'create_market_order',
+        name: 'update_order_items',
         description:
-          'Call this function ONLY when the customer explicitly agrees, gives confirmation, or says yes to completing their market order list.',
+          'Call this whenever the customer mentions an item to buy — new items, or a change to an existing one. Only include what changed this turn; the system merges it into the running list for you.',
         input_schema: {
           type: 'object',
           properties: {
             items: {
               type: 'array',
+              description: 'Items mentioned or changed this turn — not the full running list.',
               items: {
                 type: 'object',
                 properties: {
@@ -256,12 +275,17 @@ export class AiService {
             },
             deliveryAddress: {
               type: 'string',
-              description:
-                'The customer\'s delivery address or location exactly as they described it, e.g. "Soka, Ibadan" or "Bodija, near UI second gate". Omit if no location was mentioned anywhere in the conversation.',
+              description: 'The customer\'s delivery address, only if newly mentioned this turn. Omit otherwise.',
             },
           },
           required: ['items'],
         },
+      },
+      {
+        name: 'confirm_order',
+        description:
+          'Call this ONLY when the customer has explicitly confirmed they are done adding items and ready to place the order. Takes no arguments — the system already has the full list.',
+        input_schema: { type: 'object', properties: {} },
       },
     ];
   }
@@ -271,15 +295,15 @@ export class AiService {
       {
         function_declarations: [
           {
-            name: 'create_market_order',
+            name: 'update_order_items',
             description:
-              'Call this function ONLY when the customer explicitly agrees, gives confirmation, or says yes to completing their market order list.',
+              'Call this whenever the customer mentions an item to buy — new items, or a change to an existing one. Only include what changed this turn; the system merges it into the running list for you.',
             parameters: {
               type: 'OBJECT',
               properties: {
                 items: {
                   type: 'ARRAY',
-                  description: 'Clean list of market items with resolved names, numeric quantities, and units.',
+                  description: 'Items mentioned or changed this turn — not the full running list.',
                   items: {
                     type: 'OBJECT',
                     properties: {
@@ -292,12 +316,17 @@ export class AiService {
                 },
                 deliveryAddress: {
                   type: 'STRING',
-                  description:
-                    'The customer\'s delivery address or location exactly as they described it, e.g. "Soka, Ibadan" or "Bodija, near UI second gate". Omit if no location was mentioned anywhere in the conversation.',
+                  description: 'The customer\'s delivery address, only if newly mentioned this turn. Omit otherwise.',
                 },
               },
               required: ['items'],
             },
+          },
+          {
+            name: 'confirm_order',
+            description:
+              'Call this ONLY when the customer has explicitly confirmed they are done adding items and ready to place the order. Takes no arguments — the system already has the full list.',
+            parameters: { type: 'OBJECT', properties: {} },
           },
         ],
       },
@@ -314,10 +343,10 @@ export class AiService {
     }
   }
 
-  private toOrderResult(args: any): AiChatResult {
+  private toDraftUpdateResult(args: any): AiChatResult {
     const items = args?.items ?? [];
     return {
-      type: 'order',
+      type: 'draft_update',
       items: items.map((item: any) => ({
         name: String(item?.name ?? '').trim(),
         quantity: typeof item?.quantity === 'number' && !Number.isNaN(item.quantity) && item.quantity > 0 ? item.quantity : 1,
@@ -352,8 +381,11 @@ export class AiService {
     const data = await res.json();
 
     const toolUseBlock = data.content?.find((block: any) => block.type === 'tool_use');
-    if (toolUseBlock && toolUseBlock.name === 'create_market_order') {
-      return this.toOrderResult(toolUseBlock.input);
+    if (toolUseBlock?.name === 'update_order_items') {
+      return this.toDraftUpdateResult(toolUseBlock.input);
+    }
+    if (toolUseBlock?.name === 'confirm_order') {
+      return { type: 'confirm_order' };
     }
 
     const textBlock = data.content?.find((block: any) => block.type === 'text');
@@ -393,9 +425,12 @@ export class AiService {
 
     if (message.tool_calls?.length > 0) {
       const toolCall = message.tool_calls[0];
-      if (toolCall.function.name === 'create_market_order') {
+      if (toolCall.function.name === 'update_order_items') {
         const args = JSON.parse(toolCall.function.arguments);
-        return this.toOrderResult(args);
+        return this.toDraftUpdateResult(args);
+      }
+      if (toolCall.function.name === 'confirm_order') {
+        return { type: 'confirm_order' };
       }
     }
 
@@ -449,8 +484,11 @@ export class AiService {
     if (!parts) return null;
 
     const functionCallPart = parts.find((p: any) => p.functionCall);
-    if (functionCallPart && functionCallPart.functionCall.name === 'create_market_order') {
-      return this.toOrderResult(functionCallPart.functionCall.args);
+    if (functionCallPart?.functionCall.name === 'update_order_items') {
+      return this.toDraftUpdateResult(functionCallPart.functionCall.args);
+    }
+    if (functionCallPart?.functionCall.name === 'confirm_order') {
+      return { type: 'confirm_order' };
     }
 
     return parts[0]?.text ? { type: 'text', content: parts[0].text } : null;
