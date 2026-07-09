@@ -270,6 +270,15 @@ export class WebhooksController {
         });
 
         await this.conversations.clearDraft(conversation.id);
+        await this.conversations.closeSession(conversation.id);
+
+        // Fire-and-forget — don't make the customer wait on this. Without
+        // it, there's a real memory gap of up to 15 minutes (until the
+        // cron's next pass) where the bot has no idea this order was just
+        // placed if the customer says anything else right away.
+        this.conversations
+          .summarizeSession(conversation.id)
+          .catch((err) => this.logger.error(`Immediate summarization failed for session ${conversation.id}`, err));
 
         this.logger.log(`Order processed transactionally for ${whatsappNumber}`);
 

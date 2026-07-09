@@ -110,6 +110,20 @@ export class ConversationService {
   }
 
   /**
+   * Closes a session immediately rather than waiting for the idle timeout.
+   * Called right after an order is confirmed — a confirmed order is a
+   * natural end to that conversation, so the next message should start
+   * completely fresh (clean history, empty draft) instead of continuing in
+   * a session that still has the just-finished order's context in it.
+   */
+  async closeSession(sessionId: string): Promise<void> {
+    await this.prisma.chatSession.update({
+      where: { id: sessionId },
+      data: { status: ChatSessionStatus.closed, closedAt: new Date() },
+    });
+  }
+
+  /**
    * Cron target: closes conversations that have gone idle, then generates a
    * short rolling profile for any closed-but-unsummarized conversation and
    * folds it into Customer.contextSummary — so even a brand new conversation
@@ -141,11 +155,21 @@ export class ConversationService {
     });
 
     for (const convo of unsummarized) {
-      await this.summarizeOne(convo.id);
+      await this.summarizeSession(convo.id);
     }
   }
 
-  private async summarizeOne(conversationId: string): Promise<void> {
+  /**
+   * Summarizes one session and folds it into the customer's rolling
+   * profile. Public so it can be triggered immediately when a session
+   * closes (e.g. right after an order is confirmed), not just picked up
+   * by the cron up to 15 minutes later — that lag was creating a real
+   * memory gap right when customers were most likely to say something
+   * else ("when's it arriving?").  Idempotent: the cron only picks up
+   * sessions where summary is still null, so calling this immediately
+   * and letting the cron also pass over it later is harmless.
+   */
+  async summarizeSession(conversationId: string): Promise<void> {
     const messages = await this.prisma.message.findMany({
       where: { sessionId: conversationId, body: { not: null } },
       orderBy: { createdAt: 'asc' },

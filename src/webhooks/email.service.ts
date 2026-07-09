@@ -36,6 +36,8 @@ export class EmailService {
   async sendNewOrderNotification(payload: NewOrderEmailPayload): Promise<void> {
     const adminEmail = this.config.get<string>('email.adminTo');
     const fromEmail = this.config.get<string>('email.from') ?? this.config.get<string>('email.user');
+    const fromName = this.config.get<string>('email.fromName');
+    const fromHeader = fromName ? `"${fromName}" <${fromEmail}>` : fromEmail;
 
     if (!adminEmail) {
       this.logger.warn('EMAIL_ADMIN_TO is not configured — skipping new order notification email');
@@ -58,7 +60,7 @@ export class EmailService {
 
     try {
       await this.transporter.sendMail({
-        from: fromEmail,
+        from: fromHeader,
         to: adminEmail,
         subject: `New order from ${payload.customerName ?? payload.whatsappNumber}`,
         html,
