@@ -25,7 +25,39 @@ export class EmailService {
         user: this.config.get<string>('email.user'),
         pass: this.config.get<string>('email.pass'),
       },
+      tls: {
+        rejectUnauthorized: false,
+        minVersion: 'TLSv1.2',
+        ciphers: 'ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS',
+      },
+      connectionTimeout: 15_000, // fail fast on a network-level block instead of hanging the 2-minute default
+      greetingTimeout: 15_000,
+      socketTimeout: 15_000,
     });
+
+    this.verifyConnection();
+  }
+
+  /**
+   * Tests the SMTP connection on startup so a misconfiguration shows up
+   * immediately in the boot logs, rather than only being discovered when
+   * the first real order tries to send and silently times out.
+   */
+  private async verifyConnection(): Promise<void> {
+    try {
+      await this.transporter.verify();
+      this.logger.log('ZeptoMail SMTP connection verified successfully');
+    } catch (error: any) {
+      this.logger.error(`Email service configuration error: ${error.message}`);
+      if (error.code === 'ESOCKET' || error.code === 'ETIMEDOUT') {
+        this.logger.error('Likely a network-level block (firewall/IP restriction) — check ZeptoMail IP Restriction settings and Render outbound networking.');
+      } else if (error.code === 'EAUTH') {
+        this.logger.error('Auth failed — check ZEPTOMAIL_USER and ZEPTOMAIL_PASS.');
+      } else if (error.code === 'ECONNECTION') {
+        this.logger.error('Check ZEPTOMAIL_HOST and ZEPTOMAIL_PORT.');
+      }
+      this.logger.warn('Email sending will still be attempted on the first real order — this check just surfaces problems earlier.');
+    }
   }
 
   /**
