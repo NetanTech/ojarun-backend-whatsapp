@@ -175,6 +175,22 @@ export class WebhooksController {
 
     this.logger.log(`Inbound [${whatsappNumber}]: ${bodyText ?? `[${msg.type}]`}`);
 
+    // WhatsApp Cloud API delivers voice notes as type "audio" with only a
+    // media id — no transcription, so there's no text for the AI to work
+    // with. Without this, it silently fell through to the generic welcome
+    // fallback, which looks like the bot ignored them. Catching audio
+    // messages generally (not just flagged voice notes) since a plain
+    // audio file attachment can't be processed either.
+    if (msg.type === "audio") {
+      await this.sendAndLog(
+        customer.id,
+        conversation.id,
+        whatsappNumber,
+        `Sorry oh, I can't listen to voice notes yet 🎙️ — just type your message and we go run am sharp-sharp! Reply *MENU* for options.`,
+      );
+      return;
+    }
+
     // 6. Fallback static keyword router
     const replyKey = this.resolveReplyKey(bodyText, isNewCustomer);
 
