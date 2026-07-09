@@ -14,9 +14,38 @@ import { PrismaService } from "../prisma/prisma.service";
 import { WhatsappService } from "../whatsapp/whatsapp.service";
 import { WhatsappSignatureGuard } from "./signature.guard";
 import { getDeliveryWindow } from "./delivery.util";
-import { AiService } from "./ai.service";
+import { AiService, AiChatResult } from "./ai.service";
 import { ConversationService } from "./conversation.service";
 import { EmailService } from "./email.service";
+
+// Deterministic safety net: tool-calling isn't 100% reliable across every
+// model, and this is the single highest-stakes moment in the flow (it's what
+// actually creates the order). Rather than trust the model to pick
+// confirm_order every time, catch the common exact confirmation phrases
+// here first — same pattern the MENU/ORDER/HELP keyword routing already uses.
+const CONFIRM_PHRASES = new Set([
+  "THATS ALL",
+  "THAT'S ALL",
+  "THAT IS ALL",
+  "THATS IT",
+  "THAT'S IT",
+  "CONFIRM",
+  "CONFIRM ORDER",
+  "PLACE ORDER",
+  "PLACE THE ORDER",
+  "GO AHEAD",
+  "DONE",
+  "COMPLETE ORDER",
+  "FINISH ORDER",
+  "YES CONFIRM",
+  "OK CONFIRM",
+  "YES PLEASE CONFIRM",
+  "THAT WILL BE ALL",
+]);
+
+function normalizeForConfirmCheck(text: string): string {
+  return text.trim().toUpperCase().replace(/[.,!?'’]/g, "");
+}
 
 @Controller("webhooks/whatsapp")
 export class WebhooksController {
@@ -160,7 +189,17 @@ export class WebhooksController {
     // 7. Dynamic AI conversation routing, now with cross-conversation
     // customer context (contextSummary) baked into the system prompt.
     if (replyKey === "default" && bodyText) {
-      const aiResult = await this.ai.chat(bodyText, formattedHistory, customer.contextSummary ?? null);
+      // Check for an exact, unambiguous confirmation phrase first — only
+      // treated as a confirmation when there's actually a non-empty draft
+      // to confirm, so "done" or "that's it" said in some other context
+      // doesn't accidentally trigger this.
+      const existingDraft = await this.conversations.getDraft(conversation.id);
+      const isDeterministicConfirm =
+        CONFIRM_PHRASES.has(normalizeForConfirmCheck(bodyText)) && existingDraft.items.length > 0;
+
+      const aiResult: AiChatResult | null = isDeterministicConfirm
+        ? { type: "confirm_order" }
+        : await this.ai.chat(bodyText, formattedHistory, customer.contextSummary ?? null);
 
       if (aiResult?.type === "draft_update") {
         const { items, deliveryAddress } = await this.conversations.mergeDraft(
