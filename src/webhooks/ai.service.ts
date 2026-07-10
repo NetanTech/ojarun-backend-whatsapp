@@ -78,6 +78,18 @@ export class AiService {
       if (!result) return null;
       if (result.type !== 'text') return result;
 
+      // Some models (observed with Groq/Llama) occasionally hallucinate a
+      // pseudo-XML representation of the tool call as plain text instead of
+      // actually invoking it, e.g. `<function/update_order_items {...} />`.
+      // Left unhandled, that garbled text goes straight to the customer AND
+      // gets saved into history, confusing every subsequent turn. Recover
+      // it here instead of trusting every model to always call tools cleanly.
+      const recovered = this.tryRecoverToolCallFromText(result.content);
+      if (recovered) {
+        this.logger.warn(`Recovered a tool call the model emitted as text: ${result.content.slice(0, 200)}`);
+        return recovered;
+      }
+
       const trimmed = result.content.trim();
       if (trimmed === 'Not_food' || trimmed === 'NOT_FOOD') {
         return {
@@ -343,6 +355,37 @@ export class AiService {
     }
   }
 
+  /**
+   * Attempts to recover a tool call from text the model emitted instead of
+   * a real structured tool call — e.g. `<function/update_order_items {...} />`.
+   * Returns null if the text doesn't look like a hallucinated tool call at
+   * all, in which case it's genuinely just a normal reply.
+   */
+  private tryRecoverToolCallFromText(content: string): AiChatResult | null {
+    const confirmMatch = content.match(/confirm_order/i);
+    const updateMatch = content.match(/update_order_items\s*(\{[\s\S]*\})/i);
+
+    if (updateMatch) {
+      // Trim any trailing XML-ish closing tag like `/>` or `}` fragments
+      // after the JSON object before parsing.
+      let jsonText = updateMatch[1];
+      const lastBrace = jsonText.lastIndexOf('}');
+      if (lastBrace !== -1) jsonText = jsonText.slice(0, lastBrace + 1);
+      try {
+        const args = JSON.parse(jsonText);
+        return this.toDraftUpdateResult(args);
+      } catch {
+        return null; // genuinely unparseable — let it through as plain text rather than guess
+      }
+    }
+
+    if (confirmMatch) {
+      return { type: 'confirm_order' };
+    }
+
+    return null;
+  }
+
   private toDraftUpdateResult(args: any): AiChatResult {
     const items = args?.items ?? [];
     return {
@@ -418,7 +461,26 @@ export class AiService {
       }),
     });
 
-    if (!res.ok) throw new Error(`Provider error: ${res.statusText} (${await res.text()})`);
+    if (!res.ok) {
+      const rawBody = await res.text();
+      // Groq specifically can reject a tool call outright (tool_use_failed)
+      // rather than returning a garbled successful reply — but it conveniently
+      // includes what it tried to generate in error.failed_generation, in the
+      // same malformed shape as the text-hallucination case. Route it through
+      // the same recovery path instead of just failing.
+      let parsedError: any = null;
+      try {
+        parsedError = JSON.parse(rawBody);
+      } catch {
+        // not JSON — fall through to the generic throw below
+      }
+      const failedGeneration = parsedError?.error?.failed_generation;
+      if (failedGeneration) {
+        this.logger.warn('Provider rejected a tool call (tool_use_failed) — attempting recovery from failed_generation');
+        return { type: 'text', content: failedGeneration };
+      }
+      throw new Error(`Provider error: ${res.statusText} (${rawBody})`);
+    }
     const data = await res.json();
     const message = data.choices?.[0]?.message;
     if (!message) return null;

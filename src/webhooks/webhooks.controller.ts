@@ -253,6 +253,16 @@ export class WebhooksController {
           return;
         }
 
+        if (!draft.deliveryAddress) {
+          await this.sendAndLog(
+            customer.id,
+            conversation.id,
+            whatsappNumber,
+            `Almost there! 📍 I still need your delivery address before I fit place this order — just drop it and say *"that's all"* again to confirm.`,
+          );
+          return;
+        }
+
         const createdOrder = await this.prisma.$transaction(async (tx) => {
           await tx.pendingOrder.updateMany({
             where: { phone: whatsappNumber, completed: false },
@@ -314,11 +324,7 @@ export class WebhooksController {
           customerInvoiceReceipt += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
         });
 
-        if (draft.deliveryAddress) {
-          customerInvoiceReceipt += `\n📍 *Delivery to:* ${draft.deliveryAddress}`;
-        } else {
-          customerInvoiceReceipt += `\n⚠️ We no get your delivery address yet — abeg reply with your address so we fit deliver am!`;
-        }
+        customerInvoiceReceipt += `\n📍 *Delivery to:* ${draft.deliveryAddress}`;
 
         const { window, day } = getDeliveryWindow();
         customerInvoiceReceipt += `\n🚴 *Delivery Schedule:* ${window} ${day}\n\nOur market shoppers are handling it. We will send over your subtotal breakdown once pricing finishes! 🙏`;
@@ -394,7 +400,7 @@ export class WebhooksController {
     const text = (body ?? "").trim().toUpperCase();
 
     if (text === "MENU" || text.includes("WETIN DEY")) return "menu";
-    if (text === "ORDER" || text.startsWith("I WANT TO BUY") || text.startsWith("I WAN BUY")) return "order_prompt";
+    if (text === "ORDER" || text === "I WANT TO BUY" || text === "I WAN BUY") return "order_prompt";
     if (text === "HELP") return "help";
     if (text.includes("LOCATION") || text.includes("IBADAN")) return "location";
     if (text.includes("PRICE") || text.includes("HOW MUCH") || text.includes("₦")) return "pricing";
