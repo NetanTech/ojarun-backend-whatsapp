@@ -13,7 +13,16 @@ export function validateConfig(config: Record<string, any>): Record<string, any>
   ];
 
   const missing = required.filter((k) => !config[k]);
-  if (missing.length === 0) return config;
+  if (missing.length === 0) {
+    if (!config.JWT_SECRET && config.NODE_ENV === 'production') {
+      throw new Error('Missing required env vars: JWT_SECRET');
+    }
+    if (!config.JWT_SECRET) {
+      // eslint-disable-next-line no-console
+      console.warn('⚠️  JWT_SECRET is not set — using insecure dev default.');
+    }
+    return config;
+  }
 
   const msg = `Missing required env vars: ${missing.join(', ')}`;
   if (config.NODE_ENV === 'production') {

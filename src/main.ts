@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
 import { json, urlencoded } from 'express';
 
@@ -22,13 +23,20 @@ async function bootstrap() {
   );
   app.use(urlencoded({ extended: true }));
 
+  const config = app.get(ConfigService);
+  const corsOrigin = config.get<string>('cors.origin') || 'http://localhost:3001';
+  app.enableCors({
+    origin: corsOrigin.split(',').map((o) => o.trim()),
+    credentials: true,
+  });
+
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, transform: true }),
   );
 
   app.enableShutdownHooks();
 
-  const port = parseInt(process.env.PORT ?? '3000', 10);
+  const port = parseInt(process.env.PORT ?? '4000', 10);
   await app.listen(port, '0.0.0.0');
   Logger.log(`🚀 Ojarun listening on :${port}`, 'Bootstrap');
 }

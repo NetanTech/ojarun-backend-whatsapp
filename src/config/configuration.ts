@@ -1,6 +1,6 @@
 export default () => ({
   env: process.env.NODE_ENV ?? 'development',
-  port: parseInt(process.env.PORT ?? '3000', 10),
+  port: parseInt(process.env.PORT ?? '4000', 10),
   database: {
     url: process.env.DATABASE_URL,
     directUrl: process.env.DIRECT_URL,
@@ -11,6 +11,9 @@ export default () => ({
     accessToken: process.env.WHATSAPP_ACCESS_TOKEN ?? '',
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID ?? '',
     apiVersion: process.env.WHATSAPP_API_VERSION ?? 'v21.0',
+    tlsInsecure:
+      process.env.WHATSAPP_TLS_INSECURE === 'true' ||
+      (process.env.NODE_ENV ?? 'development') !== 'production',
   },
   ai: {
     provider: process.env.AI_PROVIDER ?? 'groq',
@@ -31,5 +34,22 @@ Your job each turn:
     fromName: process.env.EMAIL_FROM_NAME ?? '',
     adminTo: process.env.EMAIL_ADMIN_TO ?? '',
     zeptoApiToken: process.env.ZEPTOMAIL_API_TOKEN ?? '',
+  },
+  jwt: {
+    secret: process.env.JWT_SECRET ?? 'dev-only-change-me',
+    expiresIn: process.env.JWT_EXPIRES_IN ?? '7d',
+    resetExpiresIn: process.env.JWT_RESET_EXPIRES_IN ?? '15m',
+  },
+  cors: {
+    origin: process.env.CORS_ORIGIN ?? 'http://localhost:3001',
+  },
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME ?? '',
+    apiKey: process.env.CLOUDINARY_API_KEY ?? '',
+    apiSecret: process.env.CLOUDINARY_API_SECRET ?? '',
+    folder: process.env.CLOUDINARY_FOLDER ?? 'ojarun/products',
+    tlsInsecure:
+      process.env.CLOUDINARY_TLS_INSECURE === 'true' ||
+      (process.env.NODE_ENV ?? 'development') !== 'production',
   },
 });

@@ -16,7 +16,7 @@ import { WhatsappSignatureGuard } from "./signature.guard";
 import { getDeliveryWindow } from "./delivery.util";
 import { AiService, AiChatResult } from "./ai.service";
 import { ConversationService } from "./conversation.service";
-import { EmailService } from "./email.service";
+import { EmailService } from "../email/email.service";
 
 // Deterministic safety net: tool-calling isn't 100% reliable across every
 // model, and this is the single highest-stakes moment in the flow (it's what
@@ -174,6 +174,19 @@ export class WebhooksController {
     await this.conversations.touch(conversation.id);
 
     this.logger.log(`Inbound [${whatsappNumber}]: ${bodyText ?? `[${msg.type}]`}`);
+
+    // Human handoff: if an admin has taken over this customer, still store
+    // the inbound message but skip bot/AI auto-replies.
+    const handoff = await this.prisma.conversations.findUnique({
+      where: { customer_id: customer.id },
+      select: { mode: true, assigned_admin_id: true },
+    });
+    if (handoff?.mode === "human") {
+      this.logger.log(
+        `Handoff active for ${whatsappNumber} (admin=${handoff.assigned_admin_id ?? "unassigned"}) — skipping bot reply`,
+      );
+      return;
+    }
 
     // WhatsApp Cloud API delivers voice notes as type "audio" with only a
     // media id — no transcription, so there's no text for the AI to work

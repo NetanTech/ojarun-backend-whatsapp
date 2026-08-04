@@ -8,6 +8,33 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+model Admin {
+  id             String        @id @default(uuid()) @db.Uuid
+  email          String        @unique
+  passwordHash   String        @map("password_hash")
+  name           String?
+  phone          String?
+  role           AdminRole     @default(admin)
+  avatarUrl      String?       @map("avatar_url")
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  conversations  conversations[]
+
+  @@map("admins")
+}
+
+model PasswordResetOtp {
+  id        String    @id @default(uuid()) @db.Uuid
+  email     String
+  codeHash  String    @map("code_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([email])
+  @@map("password_reset_otps")
+}
+
 model Customer {
   id                      String         @id @default(uuid()) @db.Uuid
   whatsappNumber          String         @unique @map("whatsapp_number")
@@ -30,6 +57,9 @@ model Product {
   unit         String
   currentPrice Decimal     @map("current_price") @db.Decimal(12, 2)
   isAvailable  Boolean     @default(true) @map("is_available")
+  category     String?
+  description  String?
+  imageUrl     String?     @map("image_url")
   createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
   orderItems   OrderItem[]
@@ -87,17 +117,21 @@ model Message {
   @@map("messages")
 }
 
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+/// Bot/human handoff toggle per customer. When mode=human, WhatsApp auto-replies pause.
 model conversations {
-  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  customer_id String           @unique @db.Uuid
-  mode        ConversationMode @default(bot)
-  state       Json             @default("{}")
-  created_at  DateTime         @default(now()) @db.Timestamptz(6)
-  updated_at  DateTime         @default(now()) @db.Timestamptz(6)
-  customers   Customer         @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customer_id       String           @unique @db.Uuid
+  mode              ConversationMode @default(bot)
+  state             Json             @default("{}")
+  assigned_admin_id String?          @db.Uuid
+  created_at        DateTime         @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime         @default(now()) @db.Timestamptz(6)
+  customers         Customer         @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  assigned_admin    Admin?           @relation(fields: [assigned_admin_id], references: [id], onDelete: SetNull)
 
   @@index([customer_id])
+  @@index([assigned_admin_id])
+  @@index([mode])
 }
 
 /// Per-session message grouping for AI context + a rolling customer summary.
@@ -165,6 +199,13 @@ enum MessageDirection {
 enum ConversationMode {
   bot
   human
+}
+
+enum AdminRole {
+  superadmin
+  admin
+  customer_care
+  customer_support
 }
 
 enum ChatSessionStatus {

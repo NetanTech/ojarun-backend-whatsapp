@@ -117,13 +117,84 @@ export class EmailService {
       </html>
     `;
 
+    try {
+      await this.send({
+        to: adminEmail,
+        toName: 'OjaRun Admin',
+        fromEmail: fromEmail ?? '',
+        fromName,
+        apiToken,
+        subject: `New order from ${payload.customerName ?? payload.whatsappNumber}`,
+        html,
+      });
+    } catch (err) {
+      this.logger.error('Failed to send new order notification email', err as Error);
+    }
+  }
+
+  async sendPasswordResetOtp(to: string, code: string): Promise<void> {
+    const fromEmail = this.config.get<string>('email.from');
+    const fromName = this.config.get<string>('email.fromName') || 'OjaRun';
+    const apiToken = this.config.get<string>('email.zeptoApiToken');
+
+    if (!fromEmail || !apiToken) {
+      this.logger.warn(
+        'EMAIL_FROM / ZEPTOMAIL_API_TOKEN not configured — logging OTP in dev only',
+      );
+      this.logger.warn(`Password reset OTP for ${to}: ${code}`);
+      return;
+    }
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head><meta charset="utf-8"></head>
+        <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #F4F1EA;">
+          <div style="max-width: 560px; margin: 0 auto; padding: 24px 16px;">
+            <div style="background: #E8F0DC; border-radius: 12px 12px 0 0; padding: 28px 30px;">
+              <p style="margin: 0 0 6px 0; font-size: 13px; font-weight: 700; letter-spacing: 0.5px; color: #2F5233; text-transform: uppercase;">OjaRun</p>
+              <h1 style="margin: 0; font-size: 24px; color: #1F3820; font-weight: 700;">Password reset code</h1>
+            </div>
+            <div style="background: #FFFFFF; padding: 30px;">
+              <p style="margin: 0 0 16px 0; font-size: 15px; color: #2F2A20;">
+                Use this code to reset your admin password. It expires in 10 minutes.
+              </p>
+              <p style="margin: 0; font-size: 32px; letter-spacing: 8px; font-weight: 700; color: #1F3820; text-align: center;">
+                ${escapeHtml(code)}
+              </p>
+            </div>
+            <div style="background: #1F3820; border-radius: 0 0 12px 12px; padding: 16px 30px; text-align: center;">
+              <p style="margin: 0; font-size: 12px; color: #C7D6C1;">If you did not request this, you can ignore this email.</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+
+    await this.send({
+      to,
+      toName: 'OjaRun Admin',
+      fromEmail,
+      fromName,
+      apiToken,
+      subject: 'Your OjaRun password reset code',
+      html,
+    });
+  }
+
+  private async send(opts: {
+    to: string;
+    toName: string;
+    fromEmail: string;
+    fromName: string;
+    apiToken: string;
+    subject: string;
+    html: string;
+  }): Promise<void> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
-    // Tolerate the token being pasted either with or without the
-    // "Zoho-enczapikey " prefix — the ZeptoMail dashboard displays both
-    // together as one string, so it's an easy thing to copy either way.
-    const trimmedToken = apiToken.trim();
+    const trimmedToken = opts.apiToken.trim();
     const authHeader = trimmedToken.toLowerCase().startsWith('zoho-enczapikey')
       ? trimmedToken
       : `Zoho-enczapikey ${trimmedToken}`;
@@ -137,10 +208,10 @@ export class EmailService {
           Authorization: authHeader,
         },
         body: JSON.stringify({
-          from: { address: fromEmail, name: fromName },
-          to: [{ email_address: { address: adminEmail, name: 'OjaRun Admin' } }],
-          subject: `New order from ${payload.customerName ?? payload.whatsappNumber}`,
-          htmlbody: html,
+          from: { address: opts.fromEmail, name: opts.fromName },
+          to: [{ email_address: { address: opts.to, name: opts.toName } }],
+          subject: opts.subject,
+          htmlbody: opts.html,
         }),
         signal: controller.signal,
       });
@@ -150,9 +221,10 @@ export class EmailService {
         throw new Error(`ZeptoMail API error ${res.status}: ${errText}`);
       }
 
-      this.logger.log(`New order notification email sent for order ${payload.orderId}`);
+      this.logger.log(`Email sent to ${opts.to}: ${opts.subject}`);
     } catch (err) {
-      this.logger.error('Failed to send new order notification email', err as Error);
+      this.logger.error(`Failed to send email to ${opts.to}`, err as Error);
+      throw err;
     } finally {
       clearTimeout(timeout);
     }
