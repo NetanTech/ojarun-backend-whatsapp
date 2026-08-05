@@ -53,15 +53,21 @@ export class WhatsappService {
       };
     }
 
+    const recipient = this.normaliseNumber(to);
+
     try {
       const { data } = await this.http.post(`/${this.phoneNumberId}/messages`, {
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
-        to: this.normaliseNumber(to),
+        to: recipient,
         type: 'text',
         text: { preview_url: false, body },
       });
-      return { ok: true, wamid: data?.messages?.[0]?.id ?? null };
+      const wamid = data?.messages?.[0]?.id ?? null;
+      this.logger.log(
+        `WhatsApp outbound OK → ${recipient} wamid=${wamid ?? 'none'} phoneNumberId=${this.phoneNumberId}`,
+      );
+      return { ok: true, wamid };
     } catch (err) {
       const ax = err as AxiosError<any>;
       const apiError = ax.response?.data?.error;
@@ -71,7 +77,7 @@ export class WhatsappService {
         ax.message ||
         'Failed to send WhatsApp message';
       const code = apiError?.code ? ` (code ${apiError.code})` : '';
-      this.logger.error(`WhatsApp send failed: ${reason}${code}`);
+      this.logger.error(`WhatsApp send failed to ${recipient}: ${reason}${code}`);
 
       const authFailed =
         /auth/i.test(String(reason)) ||
