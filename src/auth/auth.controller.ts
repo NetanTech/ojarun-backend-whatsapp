@@ -16,6 +16,7 @@ import {
   ResetPasswordDto,
   UpdateProfileDto,
   ChangePasswordDto,
+  AcceptInviteDto,
 } from './dto/auth.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { CurrentAdmin, AuthAdmin } from './current-admin.decorator';
@@ -33,6 +34,12 @@ export class AuthController {
   @HttpCode(200)
   login(@Body() dto: LoginDto) {
     return this.auth.login(dto);
+  }
+
+  @Post('accept-invite')
+  @HttpCode(200)
+  acceptInvite(@Body() dto: AcceptInviteDto) {
+    return this.auth.acceptInvite(dto);
   }
 
   @Post('forgot-password')

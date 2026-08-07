@@ -7,7 +7,7 @@ import {
   IsOptional,
   IsEnum,
 } from 'class-validator';
-import { AdminRole } from '@prisma/client';
+import { AdminRole, AdminStatus } from '@prisma/client';
 
 export class RegisterDto {
   @IsEmail()
@@ -120,4 +120,55 @@ export class ChangePasswordDto {
 export class UpdateAdminRoleDto {
   @IsEnum(AdminRole)
   role!: AdminRole;
+}
+
+export class InviteAdminDto {
+  @IsEmail()
+  email!: string;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  name!: string;
+
+  @IsEnum(AdminRole)
+  role!: AdminRole;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  message?: string;
+}
+
+export class AcceptInviteDto {
+  @IsEmail()
+  email!: string;
+
+  @IsString()
+  @MinLength(20)
+  token!: string;
+
+  @IsString()
+  @MinLength(8)
+  @MaxLength(128)
+  @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, {
+    message: 'Password must include at least one letter and one number',
+  })
+  password!: string;
+}
+
+export class UpdateAdminDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  name?: string;
+
+  @IsOptional()
+  @IsEnum(AdminRole)
+  role?: AdminRole;
+
+  @IsOptional()
+  @IsEnum(AdminStatus)
+  status?: AdminStatus;
 }

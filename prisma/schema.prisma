@@ -9,17 +9,23 @@ datasource db {
 }
 
 model Admin {
-  id             String        @id @default(uuid()) @db.Uuid
-  email          String        @unique
-  passwordHash   String        @map("password_hash")
-  name           String?
-  phone          String?
-  role           AdminRole     @default(admin)
-  avatarUrl      String?       @map("avatar_url")
-  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
-  conversations  conversations[]
+  id              String        @id @default(uuid()) @db.Uuid
+  email           String        @unique
+  passwordHash    String        @map("password_hash")
+  name            String?
+  phone           String?
+  role            AdminRole     @default(admin)
+  status          AdminStatus   @default(active)
+  avatarUrl       String?       @map("avatar_url")
+  lastActiveAt    DateTime?     @map("last_active_at") @db.Timestamptz(6)
+  inviteTokenHash String?       @map("invite_token_hash")
+  inviteMessage   String?       @map("invite_message")
+  invitedById     String?       @map("invited_by_id") @db.Uuid
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  conversations   conversations[]
 
+  @@index([status])
   @@map("admins")
 }
 
@@ -204,8 +210,15 @@ enum ConversationMode {
 enum AdminRole {
   superadmin
   admin
+  agent
   customer_care
   customer_support
+}
+
+enum AdminStatus {
+  active
+  inactive
+  invited
 }
 
 enum ChatSessionStatus {

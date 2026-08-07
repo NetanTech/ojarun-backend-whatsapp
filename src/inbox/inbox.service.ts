@@ -117,8 +117,8 @@ export class InboxService {
     }));
   }
 
-  async getMessages(customerId: string, limit = 80) {
-    const take = Math.min(Math.max(limit, 1), 150);
+  async getMessages(customerId: string, limit = 200) {
+    const take = Math.min(Math.max(limit, 1), 500);
 
     const [customer, handoff, messages] = await Promise.all([
       this.prisma.customer.findUnique({
@@ -226,28 +226,39 @@ export class InboxService {
     const text = body.trim();
     if (!text) throw new BadRequestException('Message body is required');
 
-    const [customer, handoff, activeSession] = await Promise.all([
-      this.prisma.customer.findUnique({
-        where: { id: customerId },
-        select: { id: true, whatsappNumber: true },
-      }),
-      this.prisma.conversations.findUnique({
-        where: { customer_id: customerId },
-        select: { mode: true, assigned_admin_id: true },
-      }),
-      this.prisma.chatSession.findFirst({
-        where: { customerId, status: ChatSessionStatus.active },
-        orderBy: { lastActivityAt: 'desc' },
-        select: { id: true },
-      }),
-    ]);
-
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { id: true, whatsappNumber: true },
+    });
     if (!customer) throw new NotFoundException('Customer not found');
+
+    // Ensure human mode before sending (auto-takeover if still on bot)
+    let handoff = await this.prisma.conversations.findUnique({
+      where: { customer_id: customerId },
+      select: { mode: true, assigned_admin_id: true },
+    });
     if (handoff?.mode !== ConversationMode.human) {
-      throw new BadRequestException(
-        'Take over the conversation before sending a reply',
-      );
+      handoff = await this.prisma.conversations.upsert({
+        where: { customer_id: customerId },
+        create: {
+          customer_id: customerId,
+          mode: ConversationMode.human,
+          assigned_admin_id: adminId,
+        },
+        update: {
+          mode: ConversationMode.human,
+          assigned_admin_id: adminId,
+          updated_at: new Date(),
+        },
+        select: { mode: true, assigned_admin_id: true },
+      });
     }
+
+    const activeSession = await this.prisma.chatSession.findFirst({
+      where: { customerId, status: ChatSessionStatus.active },
+      orderBy: { lastActivityAt: 'desc' },
+      select: { id: true },
+    });
 
     const sent = await this.whatsapp.sendText(customer.whatsappNumber, text);
     if (!sent.ok) {
@@ -256,39 +267,49 @@ export class InboxService {
       );
     }
 
-    const [message] = await Promise.all([
-      this.prisma.message.create({
-        data: {
-          customerId,
-          sessionId: activeSession?.id ?? null,
-          whatsappMessageId: sent.wamid,
-          direction: MessageDirection.outbound,
-          body: text,
-          raw: {
-            source: 'admin_inbox',
-            adminId,
-            sentPayload: sent,
-          } as Prisma.InputJsonValue,
-        },
-        select: {
-          id: true,
-          body: true,
-          direction: true,
-          createdAt: true,
-          whatsappMessageId: true,
-        },
-      }),
-      activeSession
-        ? this.prisma.chatSession.update({
-            where: { id: activeSession.id },
-            data: { lastActivityAt: new Date() },
-          })
-        : Promise.resolve(null),
-      this.prisma.conversations.update({
-        where: { customer_id: customerId },
-        data: { updated_at: new Date() },
-      }),
-    ]);
+    const message = await this.prisma.message.create({
+      data: {
+        customerId,
+        sessionId: activeSession?.id ?? null,
+        whatsappMessageId: sent.wamid,
+        direction: MessageDirection.outbound,
+        body: text,
+        raw: {
+          source: 'admin_inbox',
+          adminId,
+          sentPayload: sent,
+        } as Prisma.InputJsonValue,
+      },
+      select: {
+        id: true,
+        body: true,
+        direction: true,
+        createdAt: true,
+        whatsappMessageId: true,
+      },
+    });
+
+    // Best-effort side updates — never undo a successful WhatsApp send
+    try {
+      await Promise.all([
+        activeSession
+          ? this.prisma.chatSession.update({
+              where: { id: activeSession.id },
+              data: { lastActivityAt: new Date() },
+            })
+          : Promise.resolve(null),
+        this.prisma.conversations.update({
+          where: { customer_id: customerId },
+          data: {
+            mode: ConversationMode.human,
+            assigned_admin_id: handoff.assigned_admin_id ?? adminId,
+            updated_at: new Date(),
+          },
+        }),
+      ]);
+    } catch {
+      // ignore
+    }
 
     return message;
   }

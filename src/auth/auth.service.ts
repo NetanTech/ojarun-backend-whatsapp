@@ -3,6 +3,7 @@ import {
   ConflictException,
   UnauthorizedException,
   BadRequestException,
+  ForbiddenException,
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -16,6 +17,7 @@ import {
   ResetPasswordDto,
   UpdateProfileDto,
   ChangePasswordDto,
+  AcceptInviteDto,
 } from './dto/auth.dto';
 import {
   hashPassword,
@@ -25,8 +27,9 @@ import {
   signToken,
   verifyToken,
   TokenPayload,
+  hashInviteToken,
 } from './crypto.util';
-import { AdminRole } from '@prisma/client';
+import { AdminRole, AdminStatus } from '@prisma/client';
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_LENGTH = 6;
@@ -52,19 +55,18 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto) {
+    const adminCount = await this.prisma.admin.count();
+    if (adminCount > 0) {
+      throw new ForbiddenException(
+        'Public signup is disabled. Ask an admin to invite you.',
+      );
+    }
+
     const email = dto.email.trim().toLowerCase();
     const existing = await this.prisma.admin.findUnique({ where: { email } });
     if (existing) {
       throw new ConflictException('An account with this email already exists');
     }
-
-    const adminCount = await this.prisma.admin.count();
-    const role =
-      adminCount === 0
-        ? AdminRole.superadmin
-        : dto.role && dto.role !== AdminRole.superadmin
-          ? dto.role
-          : AdminRole.admin;
 
     const passwordHash = await hashPassword(dto.password);
     const phone = dto.phone.trim();
@@ -74,7 +76,7 @@ export class AuthService {
         passwordHash,
         name: dto.name.trim(),
         phone,
-        role,
+        role: AdminRole.superadmin,
       },
       select: adminPublicSelect,
     });
@@ -90,12 +92,22 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
+    const status = (admin as { status?: AdminStatus }).status;
+    if (status === AdminStatus.invited) {
+      throw new UnauthorizedException(
+        'Accept your invite and set a password before signing in',
+      );
+    }
+    if (status === AdminStatus.inactive) {
+      throw new UnauthorizedException('This account is inactive');
+    }
+
     const ok = await verifyPassword(dto.password, admin.passwordHash);
     if (!ok) {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    const publicAdmin = {
+    let publicAdmin = {
       id: admin.id,
       email: admin.email,
       name: admin.name,
@@ -105,11 +117,49 @@ export class AuthService {
       createdAt: admin.createdAt,
     };
 
+    try {
+      publicAdmin = await this.prisma.admin.update({
+        where: { id: admin.id },
+        data: { lastActiveAt: new Date() },
+        select: adminPublicSelect,
+      });
+    } catch {
+      // lastActiveAt column may not exist until migrate is applied
+    }
+
     const accessToken = this.signAccessToken(publicAdmin);
     return {
       accessToken,
       admin: publicAdmin,
     };
+  }
+
+  async acceptInvite(dto: AcceptInviteDto) {
+    const email = dto.email.trim().toLowerCase();
+    const admin = await this.prisma.admin.findUnique({ where: { email } });
+    if (!admin || admin.status !== AdminStatus.invited || !admin.inviteTokenHash) {
+      throw new BadRequestException('Invalid or expired invite');
+    }
+
+    const tokenHash = hashInviteToken(dto.token);
+    if (tokenHash !== admin.inviteTokenHash) {
+      throw new BadRequestException('Invalid or expired invite');
+    }
+
+    const passwordHash = await hashPassword(dto.password);
+    const updated = await this.prisma.admin.update({
+      where: { id: admin.id },
+      data: {
+        passwordHash,
+        status: AdminStatus.active,
+        inviteTokenHash: null,
+        lastActiveAt: new Date(),
+      },
+      select: adminPublicSelect,
+    });
+
+    const accessToken = this.signAccessToken(updated);
+    return { accessToken, admin: updated };
   }
 
   async me(adminId: string) {

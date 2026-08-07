@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual, randomBytes, scrypt } from 'crypto';
+import { createHmac, createHash, timingSafeEqual, randomBytes, scrypt } from 'crypto';
 import { promisify } from 'util';
 
 const scryptAsync = promisify(scrypt);
@@ -116,4 +116,12 @@ export async function hashOtp(code: string): Promise<string> {
 
 export async function verifyOtpHash(code: string, stored: string): Promise<boolean> {
   return verifyPassword(code, stored);
+}
+
+export function hashInviteToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+export function createInviteToken(): string {
+  return randomBytes(32).toString('hex');
 }

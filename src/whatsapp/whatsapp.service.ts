@@ -54,6 +54,13 @@ export class WhatsappService {
     }
 
     const recipient = this.normaliseNumber(to);
+    if (!recipient || recipient.length < 8) {
+      return {
+        ok: false,
+        wamid: null,
+        error: `Invalid WhatsApp recipient number: "${to}"`,
+      };
+    }
 
     try {
       const { data } = await this.http.post(`/${this.phoneNumberId}/messages`, {
@@ -77,24 +84,33 @@ export class WhatsappService {
         ax.message ||
         'Failed to send WhatsApp message';
       const code = apiError?.code ? ` (code ${apiError.code})` : '';
-      this.logger.error(`WhatsApp send failed to ${recipient}: ${reason}${code}`);
+      this.logger.error(
+        `WhatsApp send failed to ${recipient}: ${reason}${code} details=${JSON.stringify(apiError ?? ax.response?.data ?? null)}`,
+      );
 
       const authFailed =
         /auth/i.test(String(reason)) ||
         ax.response?.status === 401 ||
         apiError?.code === 190;
 
+      const windowClosed =
+        apiError?.code === 131047 ||
+        /24.?hour|outside.*window|re-?engage/i.test(String(reason));
+
       return {
         ok: false,
         wamid: null,
         error: authFailed
           ? `WhatsApp Authentication Error${code}. Your WHATSAPP_ACCESS_TOKEN is invalid or expired — generate a new token in Meta Developer Console and update the backend .env, then restart Nest.`
-          : `${reason}${code}`,
+          : windowClosed
+            ? `WhatsApp 24-hour messaging window closed${code}. The customer must message you first before you can reply with free-form text.`
+            : `${reason}${code}`,
       };
     }
   }
 
   private normaliseNumber(n: string): string {
-    return n.startsWith('+') ? n.slice(1) : n;
+    // Meta expects digits only (no +, spaces, or dashes)
+    return String(n || '').replace(/\D/g, '');
   }
 }

@@ -31,9 +31,13 @@ Your job each turn:
   },
   email: {
     from: process.env.EMAIL_FROM ?? '',
-    fromName: process.env.EMAIL_FROM_NAME ?? '',
+    fromName: process.env.EMAIL_FROM_NAME ?? 'OjaRun',
     adminTo: process.env.EMAIL_ADMIN_TO ?? '',
-    zeptoApiToken: process.env.ZEPTOMAIL_API_TOKEN ?? '',
+    zeptoApiToken:
+      process.env.ZEPTOMAIL_API_KEY ||
+      process.env.ZEPTOMAIL_API_TOKEN ||
+      process.env.ZEPTOMAIL_PASS ||
+      '',
   },
   jwt: {
     secret: process.env.JWT_SECRET ?? 'dev-only-change-me',
@@ -43,6 +47,10 @@ Your job each turn:
   cors: {
     origin: process.env.CORS_ORIGIN ?? 'http://localhost:3001',
   },
+  adminAppUrl:
+    process.env.ADMIN_APP_URL ??
+    process.env.CORS_ORIGIN?.split(',')[0]?.trim() ??
+    'http://localhost:3001',
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME ?? '',
     apiKey: process.env.CLOUDINARY_API_KEY ?? '',

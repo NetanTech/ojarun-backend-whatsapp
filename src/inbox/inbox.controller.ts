@@ -21,6 +21,7 @@ import { ReplyConversationDto } from './dto/inbox.dto';
 @Roles(
   AdminRole.superadmin,
   AdminRole.admin,
+  AdminRole.agent,
   AdminRole.customer_care,
   AdminRole.customer_support,
 )
@@ -32,15 +33,7 @@ export class InboxController {
     return this.inbox.list(search);
   }
 
-  @Get(':customerId')
-  getThread(
-    @Param('customerId') customerId: string,
-    @Query('limit') limit?: string,
-  ) {
-    const take = limit ? Number(limit) : 80;
-    return this.inbox.getMessages(customerId, Number.isFinite(take) ? take : 80);
-  }
-
+  // Declare action routes before the generic :customerId GET
   @Post(':customerId/takeover')
   @HttpCode(200)
   takeover(
@@ -64,5 +57,17 @@ export class InboxController {
     @Body() dto: ReplyConversationDto,
   ) {
     return this.inbox.reply(customerId, admin.id, dto.body);
+  }
+
+  @Get(':customerId')
+  getThread(
+    @Param('customerId') customerId: string,
+    @Query('limit') limit?: string,
+  ) {
+    const take = limit ? Number(limit) : 200;
+    return this.inbox.getMessages(
+      customerId,
+      Number.isFinite(take) ? take : 200,
+    );
   }
 }

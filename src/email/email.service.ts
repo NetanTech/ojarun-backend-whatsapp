@@ -132,6 +132,74 @@ export class EmailService {
     }
   }
 
+  async sendAdminInvite(opts: {
+    to: string;
+    name: string;
+    roleLabel: string;
+    inviteUrl: string;
+    message?: string | null;
+  }): Promise<void> {
+    const fromEmail = this.config.get<string>('email.from');
+    const fromName = this.config.get<string>('email.fromName') || 'OjaRun';
+    const apiToken = this.config.get<string>('email.zeptoApiToken');
+
+    if (!fromEmail || !apiToken) {
+      this.logger.warn(
+        'EMAIL_FROM / ZEPTOMAIL_API_TOKEN not configured — logging invite link in dev only',
+      );
+      this.logger.warn(`Admin invite for ${opts.to}: ${opts.inviteUrl}`);
+      return;
+    }
+
+    const personalNote = opts.message?.trim()
+      ? `<p style="margin: 0 0 16px 0; font-size: 15px; color: #2F2A20; white-space: pre-wrap;">${escapeHtml(opts.message.trim())}</p>`
+      : '';
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head><meta charset="utf-8"></head>
+        <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #F4F1EA;">
+          <div style="max-width: 560px; margin: 0 auto; padding: 24px 16px;">
+            <div style="background: #E8F0DC; border-radius: 12px 12px 0 0; padding: 28px 30px;">
+              <p style="margin: 0 0 6px 0; font-size: 13px; font-weight: 700; letter-spacing: 0.5px; color: #2F5233; text-transform: uppercase;">OjaRun</p>
+              <h1 style="margin: 0; font-size: 24px; color: #1F3820; font-weight: 700;">You're invited</h1>
+            </div>
+            <div style="background: #FFFFFF; padding: 30px;">
+              <p style="margin: 0 0 16px 0; font-size: 15px; color: #2F2A20;">
+                Hi ${escapeHtml(opts.name)}, you've been invited to join the OjaRun admin as
+                <strong>${escapeHtml(opts.roleLabel)}</strong>.
+              </p>
+              ${personalNote}
+              <p style="margin: 0 0 24px 0;">
+                <a href="${escapeHtml(opts.inviteUrl)}"
+                   style="display: inline-block; background: #004A19; color: #ffffff; text-decoration: none; font-weight: 600; padding: 12px 20px; border-radius: 8px;">
+                  Accept invite
+                </a>
+              </p>
+              <p style="margin: 0; font-size: 13px; color: #A39D8C;">
+                This link expires in 7 days. If you did not expect this invite, you can ignore this email.
+              </p>
+            </div>
+            <div style="background: #1F3820; border-radius: 0 0 12px 12px; padding: 16px 30px; text-align: center;">
+              <p style="margin: 0; font-size: 12px; color: #C7D6C1;">OjaRun admin invitations</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+
+    await this.send({
+      to: opts.to,
+      toName: opts.name,
+      fromEmail,
+      fromName,
+      apiToken,
+      subject: "You're invited to OjaRun admin",
+      html,
+    });
+  }
+
   async sendPasswordResetOtp(to: string, code: string): Promise<void> {
     const fromEmail = this.config.get<string>('email.from');
     const fromName = this.config.get<string>('email.fromName') || 'OjaRun';
