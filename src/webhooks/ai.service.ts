@@ -90,6 +90,18 @@ export class AiService {
         return recovered;
       }
 
+      // Still looks like tool syntax after recovery failed — never show to customer
+      if (/<function[=/]|update_order_items\s*\(|confirm_order\s*\(/i.test(result.content)) {
+        this.logger.warn(
+          `Dropping unrecoverable tool-syntax text: ${result.content.slice(0, 200)}`,
+        );
+        return {
+          type: 'text',
+          content:
+            `Sorry, I no catch that clear 🙏 — abeg send the items again (e.g. "add 3kg tomatoes") or say *"that's all"* to confirm.`,
+        };
+      }
+
       const trimmed = result.content.trim();
       if (trimmed === 'Not_food' || trimmed === 'NOT_FOOD') {
         return {
@@ -362,12 +374,14 @@ export class AiService {
    * all, in which case it's genuinely just a normal reply.
    */
   private tryRecoverToolCallFromText(content: string): AiChatResult | null {
-    const confirmMatch = content.match(/confirm_order/i);
-    const updateMatch = content.match(/update_order_items\s*(\{[\s\S]*\})/i);
+    // Groq/Llama often emit: <function=update_order_items({...})> or
+    // <function/update_order_items {...} /> — allow optional ( after the name.
+    const confirmMatch = /confirm_order/i.test(content);
+    const updateMatch = content.match(
+      /update_order_items\s*\(?\s*(\{[\s\S]*\})/i,
+    );
 
     if (updateMatch) {
-      // Trim any trailing XML-ish closing tag like `/>` or `}` fragments
-      // after the JSON object before parsing.
       let jsonText = updateMatch[1];
       const lastBrace = jsonText.lastIndexOf('}');
       if (lastBrace !== -1) jsonText = jsonText.slice(0, lastBrace + 1);
@@ -375,7 +389,7 @@ export class AiService {
         const args = JSON.parse(jsonText);
         return this.toDraftUpdateResult(args);
       } catch {
-        return null; // genuinely unparseable — let it through as plain text rather than guess
+        return null;
       }
     }
 
@@ -390,11 +404,18 @@ export class AiService {
     const items = args?.items ?? [];
     return {
       type: 'draft_update',
-      items: items.map((item: any) => ({
-        name: String(item?.name ?? '').trim(),
-        quantity: typeof item?.quantity === 'number' && !Number.isNaN(item.quantity) && item.quantity > 0 ? item.quantity : 1,
-        unit: item?.unit?.toString().trim() || 'pieces',
-      })),
+      items: items
+        .map((item: any) => {
+          const rawQty = Number(item?.quantity);
+          const quantity = Number.isFinite(rawQty) ? rawQty : 1;
+          return {
+            name: String(item?.name ?? '').trim(),
+            // 0 means "remove this item" — keep it so mergeDraft can drop it
+            quantity,
+            unit: item?.unit?.toString().trim() || 'pieces',
+          };
+        })
+        .filter((item: OrderDraftItem) => item.name.length > 0),
       deliveryAddress: args?.deliveryAddress?.toString().trim() || null,
     };
   }
@@ -476,7 +497,19 @@ export class AiService {
       }
       const failedGeneration = parsedError?.error?.failed_generation;
       if (failedGeneration) {
-        this.logger.warn('Provider rejected a tool call (tool_use_failed) — attempting recovery from failed_generation');
+        this.logger.warn(
+          'Provider rejected a tool call (tool_use_failed) — attempting recovery from failed_generation',
+        );
+        const recovered = this.tryRecoverToolCallFromText(failedGeneration);
+        if (recovered) return recovered;
+        // Never send raw tool syntax to the customer
+        if (/update_order_items|confirm_order|<function/i.test(failedGeneration)) {
+          return {
+            type: 'text',
+            content:
+              `Sorry, I no catch that clear 🙏 — abeg send the items again (e.g. "add 3kg tomatoes") or say *"that's all"* to confirm.`,
+          };
+        }
         return { type: 'text', content: failedGeneration };
       }
       throw new Error(`Provider error: ${res.statusText} (${rawBody})`);

@@ -43,7 +43,58 @@ export class WhatsappService {
     });
   }
 
-  async sendText(to: string, body: string): Promise<{ ok: boolean; wamid: string | null; error?: string }> {
+  async sendText(
+    to: string,
+    body: string,
+    options?: { previewUrl?: boolean },
+  ): Promise<{ ok: boolean; wamid: string | null; error?: string }> {
+    return this.sendPayload(to, {
+      type: 'text',
+      text: { preview_url: options?.previewUrl === true, body },
+    });
+  }
+
+  /**
+   * Interactive CTA URL button — best UX for Paystack checkout links.
+   * Falls back to plain text with the URL if Meta rejects the interactive type.
+   */
+  async sendPaymentLink(
+    to: string,
+    body: string,
+    paymentUrl: string,
+    buttonLabel = 'Pay now',
+  ): Promise<{ ok: boolean; wamid: string | null; error?: string }> {
+    const interactive = await this.sendPayload(to, {
+      type: 'interactive',
+      interactive: {
+        type: 'cta_url',
+        body: { text: body },
+        action: {
+          name: 'cta_url',
+          parameters: {
+            display_text: buttonLabel.slice(0, 20),
+            url: paymentUrl,
+          },
+        },
+      },
+    });
+
+    if (interactive.ok) return interactive;
+
+    this.logger.warn(
+      `CTA URL send failed (${interactive.error}); falling back to text with link`,
+    );
+    return this.sendText(
+      to,
+      `${body}\n\n💳 Pay here: ${paymentUrl}`,
+      { previewUrl: true },
+    );
+  }
+
+  private async sendPayload(
+    to: string,
+    payload: Record<string, unknown>,
+  ): Promise<{ ok: boolean; wamid: string | null; error?: string }> {
     if (!this.phoneNumberId || !this.config.get<string>('whatsapp.accessToken')) {
       return {
         ok: false,
@@ -67,8 +118,7 @@ export class WhatsappService {
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
         to: recipient,
-        type: 'text',
-        text: { preview_url: false, body },
+        ...payload,
       });
       const wamid = data?.messages?.[0]?.id ?? null;
       this.logger.log(

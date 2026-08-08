@@ -74,19 +74,24 @@ model Product {
 }
 
 model Order {
-  id            String      @id @default(uuid()) @db.Uuid
-  customerId    String      @map("customer_id") @db.Uuid
-  channel       Channel     @default(whatsapp)
-  status        OrderStatus @default(pending)
-  total         Decimal     @default(0) @db.Decimal(12, 2)
-  customerNotes String?     @map("customer_notes")
-  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
-  items         OrderItem[]
-  customer      Customer    @relation(fields: [customerId], references: [id])
+  id                String        @id @default(uuid()) @db.Uuid
+  customerId        String        @map("customer_id") @db.Uuid
+  channel           Channel       @default(whatsapp)
+  status            OrderStatus   @default(pending)
+  paymentStatus     PaymentStatus @default(unpaid) @map("payment_status")
+  total             Decimal       @default(0) @db.Decimal(12, 2)
+  customerNotes     String?       @map("customer_notes")
+  paystackReference String?       @unique @map("paystack_reference")
+  paymentUrl        String?       @map("payment_url")
+  paidAt            DateTime?     @map("paid_at") @db.Timestamptz(6)
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  items             OrderItem[]
+  customer          Customer      @relation(fields: [customerId], references: [id])
 
   @@index([customerId])
   @@index([status])
+  @@index([paymentStatus])
   @@map("orders")
 }
 
@@ -189,12 +194,20 @@ enum Channel {
 
 enum OrderStatus {
   pending
+  awaiting_payment
   confirmed
   shopping
   purchased
   dispatched
   delivered
   cancelled
+}
+
+enum PaymentStatus {
+  unpaid
+  pending
+  paid
+  failed
 }
 
 enum MessageDirection {

@@ -73,7 +73,13 @@ export class ConversationService {
 
     const merged = [...existingItems];
     for (const incoming of incomingItems) {
-      const idx = merged.findIndex((m) => m.name.toLowerCase() === incoming.name.toLowerCase());
+      const idx = merged.findIndex(
+        (m) => m.name.toLowerCase() === incoming.name.toLowerCase(),
+      );
+      if (incoming.quantity <= 0) {
+        if (idx >= 0) merged.splice(idx, 1);
+        continue;
+      }
       if (idx >= 0) {
         merged[idx] = incoming;
       } else {

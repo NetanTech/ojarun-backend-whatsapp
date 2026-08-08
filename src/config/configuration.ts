@@ -51,6 +51,18 @@ Your job each turn:
     process.env.ADMIN_APP_URL ??
     process.env.CORS_ORIGIN?.split(',')[0]?.trim() ??
     'http://localhost:3001',
+  // Public URL of this Nest API (used for Paystack webhook / redirects)
+  publicApiUrl:
+    process.env.PUBLIC_API_URL ??
+    process.env.BACKEND_PUBLIC_URL ??
+    `http://localhost:${parseInt(process.env.PORT ?? '4000', 10)}`,
+  webAppUrl: process.env.WEB_APP_URL ?? 'http://localhost:3000',
+  paystack: {
+    secretKey: process.env.PAYSTACK_SECRET_KEY ?? '',
+    publicKey: process.env.PAYSTACK_PUBLIC_KEY ?? '',
+    // Optional override; defaults to Paystack HMAC with secretKey
+    webhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET ?? '',
+  },
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME ?? '',
     apiKey: process.env.CLOUDINARY_API_KEY ?? '',

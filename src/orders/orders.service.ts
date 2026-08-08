@@ -162,7 +162,11 @@ export class OrdersService {
   /** Compact badge for the orders table */
   private toUiStatus(status: OrderStatus): 'Pending' | 'Active' | 'Cancelled' {
     if (status === OrderStatus.cancelled) return 'Cancelled';
-    if (status === OrderStatus.pending || status === OrderStatus.confirmed) {
+    if (
+      status === OrderStatus.pending ||
+      status === OrderStatus.awaiting_payment ||
+      status === OrderStatus.confirmed
+    ) {
       return 'Pending';
     }
     return 'Active';

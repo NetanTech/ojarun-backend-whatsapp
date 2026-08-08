@@ -15,6 +15,7 @@ import { UploadModule } from './upload/upload.module';
 import { CustomersModule } from './customers/customers.module';
 import { AdminsModule } from './admins/admins.module';
 import { InboxModule } from './inbox/inbox.module';
+import { PaystackModule } from './paystack/paystack.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { InboxModule } from './inbox/inbox.module';
     PrismaModule,
     EmailModule,
     WhatsappModule,
+    PaystackModule,
     WebhooksModule,
     AuthModule,
     ProductsModule,

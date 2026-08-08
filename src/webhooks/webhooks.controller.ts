@@ -9,7 +9,13 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { MessageDirection, Prisma, Channel, OrderStatus } from "@prisma/client";
+import {
+  MessageDirection,
+  Prisma,
+  Channel,
+  OrderStatus,
+  PaymentStatus,
+} from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { WhatsappService } from "../whatsapp/whatsapp.service";
 import { WhatsappSignatureGuard } from "./signature.guard";
@@ -17,6 +23,8 @@ import { getDeliveryWindow } from "./delivery.util";
 import { AiService, AiChatResult } from "./ai.service";
 import { ConversationService } from "./conversation.service";
 import { EmailService } from "../email/email.service";
+import { PaystackService } from "../paystack/paystack.service";
+import { randomBytes } from "crypto";
 
 // Deterministic safety net: tool-calling isn't 100% reliable across every
 // model, and this is the single highest-stakes moment in the flow (it's what
@@ -47,6 +55,14 @@ function normalizeForConfirmCheck(text: string): string {
   return text.trim().toUpperCase().replace(/[.,!?'’]/g, "");
 }
 
+function looksLikeCartRequest(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  return (
+    /\b(cart|list|order)\b/.test(t) &&
+    /\b(see|show|view|wetin|what's|whats|my)\b/.test(t)
+  );
+}
+
 @Controller("webhooks/whatsapp")
 export class WebhooksController {
   private readonly logger = new Logger(WebhooksController.name);
@@ -58,6 +74,7 @@ export class WebhooksController {
     private readonly ai: AiService,
     private readonly conversations: ConversationService,
     private readonly email: EmailService,
+    private readonly paystack: PaystackService,
   ) {}
 
   @Get()
@@ -226,6 +243,29 @@ export class WebhooksController {
       const isDeterministicConfirm =
         CONFIRM_PHRASES.has(normalizeForConfirmCheck(bodyText)) && existingDraft.items.length > 0;
 
+      // Cart/list questions must read the real draft — never let the model invent items
+      if (!isDeterministicConfirm && looksLikeCartRequest(bodyText)) {
+        if (existingDraft.items.length === 0) {
+          await this.sendAndLog(
+            customer.id,
+            conversation.id,
+            whatsappNumber,
+            `Your cart empty for now 🛒 — just drop the items you want make we start packing am.`,
+          );
+          return;
+        }
+        let cartSummary = `Your current order:\n\n`;
+        existingDraft.items.forEach((item) => {
+          cartSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
+        });
+        cartSummary += existingDraft.deliveryAddress
+          ? `\n📍 Delivery to: ${existingDraft.deliveryAddress}`
+          : `\n⚠️ Still need your delivery address.`;
+        cartSummary += `\n\nAdd/remove items anytime, or say *"that's all"* when you're ready.`;
+        await this.sendAndLog(customer.id, conversation.id, whatsappNumber, cartSummary);
+        return;
+      }
+
       const aiResult: AiChatResult | null = isDeterministicConfirm
         ? { type: "confirm_order" }
         : await this.ai.chat(bodyText, formattedHistory, customer.contextSummary ?? null);
@@ -276,6 +316,14 @@ export class WebhooksController {
           return;
         }
 
+        const pricedItems = await this.priceDraftItems(draft.items);
+        const totalNaira = pricedItems.reduce(
+          (sum, item) => sum + item.lineTotal,
+          0,
+        );
+        const allPriced = pricedItems.every((item) => item.unitPrice > 0);
+        const paystackRef = `oja_${randomBytes(8).toString("hex")}`;
+
         const createdOrder = await this.prisma.$transaction(async (tx) => {
           await tx.pendingOrder.updateMany({
             where: { phone: whatsappNumber, completed: false },
@@ -287,19 +335,21 @@ export class WebhooksController {
               customerId: customer.id,
               channel: Channel.whatsapp,
               status: OrderStatus.pending,
-              total: new Prisma.Decimal(0.0),
+              paymentStatus: PaymentStatus.unpaid,
+              total: new Prisma.Decimal(totalNaira.toFixed(2)),
               customerNotes: draft.deliveryAddress,
+              paystackReference: paystackRef,
             },
           });
 
-          for (const item of draft.items) {
+          for (const item of pricedItems) {
             await tx.orderItem.create({
               data: {
                 orderId: order.id,
-                productId: null,
+                productId: item.productId,
                 productNameSnapshot: item.name,
                 unitSnapshot: item.unit,
-                unitPriceSnapshot: new Prisma.Decimal(0.0),
+                unitPriceSnapshot: new Prisma.Decimal(item.unitPrice.toFixed(2)),
                 quantity: new Prisma.Decimal(item.quantity),
               },
             });
@@ -332,21 +382,83 @@ export class WebhooksController {
           createdAt: createdOrder.createdAt,
         });
 
-        let customerInvoiceReceipt = `E don set! 🔥 I have compiled your OjaRun market order list:\n\n`;
-        draft.items.forEach((item) => {
-          customerInvoiceReceipt += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
-        });
-
-        customerInvoiceReceipt += `\n📍 *Delivery to:* ${draft.deliveryAddress}`;
-
         const { window, day } = getDeliveryWindow();
-        customerInvoiceReceipt += `\n🚴 *Delivery Schedule:* ${window} ${day}\n\nOur market shoppers are handling it. We will send over your subtotal breakdown once pricing finishes! 🙏`;
+        let customerInvoiceReceipt = `E don set! 🔥 I have compiled your OjaRun market order list:\n\n`;
+        pricedItems.forEach((item) => {
+          const priceBit =
+            item.unitPrice > 0
+              ? ` — ₦${(item.lineTotal).toLocaleString("en-NG")}`
+              : "";
+          customerInvoiceReceipt += `🔸 *${item.name}* — ${item.quantity} ${item.unit}${priceBit}\n`;
+        });
+        customerInvoiceReceipt += `\n📍 *Delivery to:* ${draft.deliveryAddress}`;
+        customerInvoiceReceipt += `\n🚴 *Delivery Schedule:* ${window} ${day}`;
+
+        // Charge via Paystack link when we have a catalog total; otherwise
+        // keep the old "pricing finishes" path until items are priced.
+        if (allPriced && totalNaira >= 1 && this.paystack.isConfigured()) {
+          const webAppUrl = this.config.get<string>("webAppUrl") || "";
+          const callbackUrl = webAppUrl
+            ? `${webAppUrl.replace(/\/$/, "")}/payment/callback`
+            : undefined;
+          const payEmail = `${whatsappNumber.replace(/\D/g, "")}@whatsapp.ojarun.ng`;
+
+          const payment = await this.paystack.initializeTransaction({
+            email: payEmail,
+            amountNaira: totalNaira,
+            reference: paystackRef,
+            callbackUrl,
+            metadata: {
+              orderId: createdOrder.id,
+              channel: "whatsapp",
+              customerId: customer.id,
+            },
+          });
+
+          if (payment.ok && payment.authorizationUrl) {
+            await this.prisma.order.update({
+              where: { id: createdOrder.id },
+              data: {
+                status: OrderStatus.awaiting_payment,
+                paymentStatus: PaymentStatus.pending,
+                paymentUrl: payment.authorizationUrl,
+              },
+            });
+
+            customerInvoiceReceipt += `\n\n💰 *Subtotal:* ₦${totalNaira.toLocaleString("en-NG")}`;
+            customerInvoiceReceipt += `\n\nTap *Pay now* to complete checkout. Once payment clears, our market shoppers start shopping. 🙏`;
+
+            await this.sendPaymentAndLog(
+              customer.id,
+              conversation.id,
+              whatsappNumber,
+              customerInvoiceReceipt,
+              payment.authorizationUrl,
+            );
+            return;
+          }
+
+          this.logger.error(
+            `Paystack init failed for order ${createdOrder.id}: ${payment.error}`,
+          );
+          customerInvoiceReceipt += `\n\n💰 *Subtotal:* ₦${totalNaira.toLocaleString("en-NG")}`;
+          customerInvoiceReceipt += `\n\nPayment link no gree open just now — our team go send am sharp-sharp. 🙏`;
+        } else {
+          customerInvoiceReceipt += `\n\nOur market shoppers are handling it. We will send over your subtotal breakdown once pricing finishes! 🙏`;
+        }
 
         await this.sendAndLog(customer.id, conversation.id, whatsappNumber, customerInvoiceReceipt);
         return;
       }
 
       if (aiResult?.type === "text") {
+        // Never forward hallucinated tool syntax to WhatsApp
+        if (/<function[=/]|update_order_items\s*\(|confirm_order\s*\(/i.test(aiResult.content)) {
+          this.logger.warn(
+            `Suppressed outbound tool-syntax leak: ${aiResult.content.slice(0, 160)}`,
+          );
+          return;
+        }
         await this.sendAndLog(customer.id, conversation.id, whatsappNumber, aiResult.content);
         return;
       }
@@ -373,6 +485,46 @@ export class WebhooksController {
     }
 
     await this.sendAndLog(customer.id, conversation.id, whatsappNumber, staticMessageBody);
+  }
+
+  /**
+   * Match draft item names to catalog products (case-insensitive).
+   * Unmatched items keep unitPrice 0 so confirm can fall back to
+   * "pricing finishes" instead of inventing a charge.
+   */
+  private async priceDraftItems(
+    items: { name: string; quantity: number; unit: string }[],
+  ): Promise<
+    {
+      name: string;
+      quantity: number;
+      unit: string;
+      productId: string | null;
+      unitPrice: number;
+      lineTotal: number;
+    }[]
+  > {
+    const products = await this.prisma.product.findMany({
+      where: { isAvailable: true },
+      select: { id: true, name: true, unit: true, currentPrice: true },
+    });
+    const byName = new Map(
+      products.map((p) => [p.name.trim().toLowerCase(), p]),
+    );
+
+    return items.map((item) => {
+      const match = byName.get(item.name.trim().toLowerCase());
+      const unitPrice = match ? Number(match.currentPrice) : 0;
+      const quantity = Number(item.quantity) || 0;
+      return {
+        name: item.name,
+        quantity,
+        unit: match?.unit || item.unit,
+        productId: match?.id ?? null,
+        unitPrice,
+        lineTotal: unitPrice * quantity,
+      };
+    });
   }
 
   /**
@@ -405,6 +557,39 @@ export class WebhooksController {
       // TODO: wire this into an alert/retry queue. DB state (e.g. an
       // already-created order) is still correct even if the customer wasn't
       // notified — this just needs a delivery retry, not a data fix.
+    }
+  }
+
+  private async sendPaymentAndLog(
+    customerId: string,
+    conversationId: string,
+    whatsappNumber: string,
+    body: string,
+    paymentUrl: string,
+  ): Promise<void> {
+    try {
+      const sentPayload = await this.whatsapp.sendPaymentLink(
+        whatsappNumber,
+        body,
+        paymentUrl,
+        "Pay now",
+      );
+      await this.prisma.message.create({
+        data: {
+          customerId,
+          sessionId: conversationId,
+          whatsappMessageId: sentPayload.wamid!,
+          direction: MessageDirection.outbound,
+          body: `${body}\n\n${paymentUrl}`,
+          raw: { sentPayload, paymentUrl } as Prisma.InputJsonValue,
+        },
+      });
+      await this.conversations.touch(conversationId);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send/log payment link to ${whatsappNumber}`,
+        error as Error,
+      );
     }
   }
 
