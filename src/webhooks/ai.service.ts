@@ -385,12 +385,9 @@ export class AiService {
       let jsonText = updateMatch[1];
       const lastBrace = jsonText.lastIndexOf('}');
       if (lastBrace !== -1) jsonText = jsonText.slice(0, lastBrace + 1);
-      try {
-        const args = JSON.parse(jsonText);
-        return this.toDraftUpdateResult(args);
-      } catch {
-        return null;
-      }
+      const args = this.parseLooseJson(jsonText);
+      if (args) return this.toDraftUpdateResult(args);
+      return null;
     }
 
     if (confirmMatch) {
@@ -398,6 +395,23 @@ export class AiService {
     }
 
     return null;
+  }
+
+  /** Strict JSON first; then single-quote / trailing-comma cleanup for Groq junk. */
+  private parseLooseJson(text: string): any | null {
+    try {
+      return JSON.parse(text);
+    } catch {
+      // fall through
+    }
+    try {
+      const softened = text
+        .replace(/,\s*([}\]])/g, '$1')
+        .replace(/'/g, '"');
+      return JSON.parse(softened);
+    } catch {
+      return null;
+    }
   }
 
   private toDraftUpdateResult(args: any): AiChatResult {

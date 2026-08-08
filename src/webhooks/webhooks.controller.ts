@@ -24,6 +24,7 @@ import { AiService, AiChatResult } from "./ai.service";
 import { ConversationService } from "./conversation.service";
 import { EmailService } from "../email/email.service";
 import { PaystackService } from "../paystack/paystack.service";
+import { parseBudgetNaira } from "./budget.util";
 import { randomBytes } from "crypto";
 
 // Deterministic safety net: tool-calling isn't 100% reliable across every
@@ -60,6 +61,15 @@ function looksLikeCartRequest(text: string): boolean {
   return (
     /\b(cart|list|order)\b/.test(t) &&
     /\b(see|show|view|wetin|what's|whats|my)\b/.test(t)
+  );
+}
+
+/** First message already contains a shopping request — don't bury it under welcome. */
+function looksLikeOrderIntent(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  return (
+    /\b(buy|wan\b|want|order|need|get me|add)\b/.test(t) ||
+    /\b(\d+\s*k\b|\d+\s*thousand|naira|₦|\bkg\b|\bbag\b)\b/.test(t)
   );
 }
 
@@ -394,55 +404,62 @@ export class WebhooksController {
         customerInvoiceReceipt += `\n📍 *Delivery to:* ${draft.deliveryAddress}`;
         customerInvoiceReceipt += `\n🚴 *Delivery Schedule:* ${window} ${day}`;
 
-        // Charge via Paystack link when we have a catalog total; otherwise
-        // keep the old "pricing finishes" path until items are priced.
-        if (allPriced && totalNaira >= 1 && this.paystack.isConfigured()) {
-          const webAppUrl = this.config.get<string>("webAppUrl") || "";
-          const callbackUrl = webAppUrl
-            ? `${webAppUrl.replace(/\/$/, "")}/payment/callback`
-            : undefined;
-          const payEmail = `${whatsappNumber.replace(/\D/g, "")}@whatsapp.ojarun.ng`;
+        // Charge when every line has a price (catalog match OR customer budget
+        // like "fish 2 thousand" → ₦2000). Otherwise keep the pricing-wait copy.
+        if (allPriced && totalNaira >= 1) {
+          customerInvoiceReceipt += `\n\n💰 *Subtotal:* ₦${totalNaira.toLocaleString("en-NG")}`;
 
-          const payment = await this.paystack.initializeTransaction({
-            email: payEmail,
-            amountNaira: totalNaira,
-            reference: paystackRef,
-            callbackUrl,
-            metadata: {
-              orderId: createdOrder.id,
-              channel: "whatsapp",
-              customerId: customer.id,
-            },
-          });
+          if (!this.paystack.isConfigured()) {
+            this.logger.warn(
+              `Order ${createdOrder.id} priced (₦${totalNaira}) but Paystack keys are missing`,
+            );
+            customerInvoiceReceipt += `\n\nOrder received — payment link go follow sharp-sharp. 🙏`;
+          } else {
+            const webAppUrl = this.config.get<string>("webAppUrl") || "";
+            const callbackUrl = webAppUrl
+              ? `${webAppUrl.replace(/\/$/, "")}/payment/callback`
+              : undefined;
+            const payEmail = `${whatsappNumber.replace(/\D/g, "")}@whatsapp.ojarun.ng`;
 
-          if (payment.ok && payment.authorizationUrl) {
-            await this.prisma.order.update({
-              where: { id: createdOrder.id },
-              data: {
-                status: OrderStatus.awaiting_payment,
-                paymentStatus: PaymentStatus.pending,
-                paymentUrl: payment.authorizationUrl,
+            const payment = await this.paystack.initializeTransaction({
+              email: payEmail,
+              amountNaira: totalNaira,
+              reference: paystackRef,
+              callbackUrl,
+              metadata: {
+                orderId: createdOrder.id,
+                channel: "whatsapp",
+                customerId: customer.id,
               },
             });
 
-            customerInvoiceReceipt += `\n\n💰 *Subtotal:* ₦${totalNaira.toLocaleString("en-NG")}`;
-            customerInvoiceReceipt += `\n\nTap *Pay now* to complete checkout. Once payment clears, our market shoppers start shopping. 🙏`;
+            if (payment.ok && payment.authorizationUrl) {
+              await this.prisma.order.update({
+                where: { id: createdOrder.id },
+                data: {
+                  status: OrderStatus.awaiting_payment,
+                  paymentStatus: PaymentStatus.pending,
+                  paymentUrl: payment.authorizationUrl,
+                },
+              });
 
-            await this.sendPaymentAndLog(
-              customer.id,
-              conversation.id,
-              whatsappNumber,
-              customerInvoiceReceipt,
-              payment.authorizationUrl,
+              customerInvoiceReceipt += `\n\nTap *Pay now* to complete checkout. Once payment clears, our market shoppers start shopping. 🙏`;
+
+              await this.sendPaymentAndLog(
+                customer.id,
+                conversation.id,
+                whatsappNumber,
+                customerInvoiceReceipt,
+                payment.authorizationUrl,
+              );
+              return;
+            }
+
+            this.logger.error(
+              `Paystack init failed for order ${createdOrder.id}: ${payment.error}`,
             );
-            return;
+            customerInvoiceReceipt += `\n\nPayment link no gree open just now — our team go send am sharp-sharp. 🙏`;
           }
-
-          this.logger.error(
-            `Paystack init failed for order ${createdOrder.id}: ${payment.error}`,
-          );
-          customerInvoiceReceipt += `\n\n💰 *Subtotal:* ₦${totalNaira.toLocaleString("en-NG")}`;
-          customerInvoiceReceipt += `\n\nPayment link no gree open just now — our team go send am sharp-sharp. 🙏`;
         } else {
           customerInvoiceReceipt += `\n\nOur market shoppers are handling it. We will send over your subtotal breakdown once pricing finishes! 🙏`;
         }
@@ -488,9 +505,8 @@ export class WebhooksController {
   }
 
   /**
-   * Match draft item names to catalog products (case-insensitive).
-   * Unmatched items keep unitPrice 0 so confirm can fall back to
-   * "pricing finishes" instead of inventing a charge.
+   * Price draft lines from catalog OR customer budget wording
+   * (e.g. unit "N2000 worth" / "fish 2 thousand").
    */
   private async priceDraftItems(
     items: { name: string; quantity: number; unit: string }[],
@@ -514,8 +530,22 @@ export class WebhooksController {
 
     return items.map((item) => {
       const match = byName.get(item.name.trim().toLowerCase());
-      const unitPrice = match ? Number(match.currentPrice) : 0;
       const quantity = Number(item.quantity) || 0;
+      const budget = parseBudgetNaira(item.unit, item.name);
+
+      // Budget orders ("₦2k worth of fish") — the stated money IS the line total
+      if (budget != null) {
+        return {
+          name: item.name,
+          quantity: quantity > 0 ? quantity : 1,
+          unit: item.unit,
+          productId: match?.id ?? null,
+          unitPrice: budget,
+          lineTotal: budget,
+        };
+      }
+
+      const unitPrice = match ? Number(match.currentPrice) : 0;
       return {
         name: item.name,
         quantity,
@@ -594,7 +624,11 @@ export class WebhooksController {
   }
 
   private resolveReplyKey(body: string | null, isNewCustomer: boolean): string {
-    if (isNewCustomer) return "welcome";
+    // New customer who already dropped a shopping list → skip static welcome
+    if (isNewCustomer) {
+      if (body && looksLikeOrderIntent(body)) return "default";
+      return "welcome";
+    }
     const text = (body ?? "").trim().toUpperCase();
 
     if (text === "MENU" || text.includes("WETIN DEY")) return "menu";
