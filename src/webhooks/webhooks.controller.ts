@@ -24,7 +24,7 @@ import { AiService, AiChatResult } from "./ai.service";
 import { ConversationService } from "./conversation.service";
 import { EmailService } from "../email/email.service";
 import { PaystackService } from "../paystack/paystack.service";
-import { parseBudgetNaira } from "./budget.util";
+import { parseBudgetNaira, applyBudgetHintsFromMessage, extractBudgetItemsFromMessage } from "./budget.util";
 import { randomBytes } from "crypto";
 
 // Deterministic safety net: tool-calling isn't 100% reliable across every
@@ -57,9 +57,13 @@ function normalizeForConfirmCheck(text: string): string {
 }
 
 function looksLikeCartRequest(text: string): boolean {
-  const t = text.trim().toLowerCase();
+  const t = text.trim().toLowerCase().replace(/[?.!]/g, "");
+  if (/^(my\s+)?(cart|order|orders|list)$/.test(t)) return true;
+  if (/^(show|see|view|wetin|what's|whats)\b/.test(t) && /\b(cart|order|orders|list)\b/.test(t)) {
+    return true;
+  }
   return (
-    /\b(cart|list|order)\b/.test(t) &&
+    /\b(cart|list|orders?)\b/.test(t) &&
     /\b(see|show|view|wetin|what's|whats|my)\b/.test(t)
   );
 }
@@ -280,11 +284,14 @@ export class WebhooksController {
         ? { type: "confirm_order" }
         : await this.ai.chat(bodyText, formattedHistory, customer.contextSummary ?? null);
 
-      if (aiResult?.type === "draft_update") {
+      // If the model failed / leaked tools, still parse Nigerian "item 2k" budgets
+      const resolved = this.resolveDraftFromAiOrMessage(bodyText, aiResult);
+
+      if (resolved?.type === "draft_update") {
         const { items, deliveryAddress } = await this.conversations.mergeDraft(
           conversation.id,
-          aiResult.items,
-          aiResult.deliveryAddress,
+          resolved.items,
+          resolved.deliveryAddress,
         );
 
         let draftSummary = `Noted! Here's your list so far:\n\n`;
@@ -300,7 +307,7 @@ export class WebhooksController {
         return;
       }
 
-      if (aiResult?.type === "confirm_order") {
+      if (resolved?.type === "confirm_order") {
         // The draft (not anything the model just said) is the source of
         // truth here — it was built up incrementally across every
         // update_order_items call, so it can't be missing earlier items.
@@ -468,18 +475,22 @@ export class WebhooksController {
         return;
       }
 
-      if (aiResult?.type === "text") {
+      if (resolved?.type === "text") {
         // Never forward hallucinated tool syntax to WhatsApp
-        if (/<function[=/]|update_order_items\s*\(|confirm_order\s*\(/i.test(aiResult.content)) {
+        if (
+          /<function[=/(]|update_order_items\s*\)?\s*\(?\s*\{|confirm_order\s*\(/i.test(
+            resolved.content,
+          )
+        ) {
           this.logger.warn(
-            `Suppressed outbound tool-syntax leak: ${aiResult.content.slice(0, 160)}`,
+            `Suppressed outbound tool-syntax leak: ${resolved.content.slice(0, 160)}`,
           );
           return;
         }
-        await this.sendAndLog(customer.id, conversation.id, whatsappNumber, aiResult.content);
+        await this.sendAndLog(customer.id, conversation.id, whatsappNumber, resolved.content);
         return;
       }
-      // aiResult === null means the provider call failed — fall through to
+      // resolved === null means the provider call failed — fall through to
       // the static fallback below instead of leaving the customer with nothing.
     }
 
@@ -502,6 +513,52 @@ export class WebhooksController {
     }
 
     await this.sendAndLog(customer.id, conversation.id, whatsappNumber, staticMessageBody);
+  }
+
+  /**
+   * Prefer structured AI draft updates, but always correct Nigerian "2k" money
+   * shorthand and fall back to deterministic parsing when the model fails.
+   */
+  private resolveDraftFromAiOrMessage(
+    bodyText: string,
+    aiResult: AiChatResult | null,
+  ): AiChatResult | null {
+    const fromMessage = extractBudgetItemsFromMessage(bodyText);
+
+    if (aiResult?.type === "draft_update") {
+      const corrected = applyBudgetHintsFromMessage(bodyText, aiResult.items);
+      const byName = new Map(
+        corrected.map((item) => [item.name.toLowerCase(), item]),
+      );
+      for (const hint of fromMessage) {
+        if (!byName.has(hint.name.toLowerCase())) {
+          byName.set(hint.name.toLowerCase(), hint);
+        }
+      }
+      return {
+        type: "draft_update",
+        items: [...byName.values()],
+        deliveryAddress: aiResult.deliveryAddress,
+      };
+    }
+
+    if (aiResult?.type === "confirm_order") {
+      return aiResult;
+    }
+
+    // Model returned junk / sorry / null — still try money-shorthand parse
+    if (fromMessage.length > 0) {
+      this.logger.warn(
+        `AI miss on "${bodyText.slice(0, 80)}" — recovered ${fromMessage.length} budget item(s) from message`,
+      );
+      return {
+        type: "draft_update",
+        items: fromMessage,
+        deliveryAddress: null,
+      };
+    }
+
+    return aiResult;
   }
 
   /**

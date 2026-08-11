@@ -91,7 +91,7 @@ export class AiService {
       }
 
       // Still looks like tool syntax after recovery failed — never show to customer
-      if (/<function[=/]|update_order_items\s*\(|confirm_order\s*\(/i.test(result.content)) {
+      if (/<function[=/(]|update_order_items\s*\)?\s*\(?\s*\{|confirm_order\s*\(/i.test(result.content)) {
         this.logger.warn(
           `Dropping unrecoverable tool-syntax text: ${result.content.slice(0, 200)}`,
         );
@@ -207,6 +207,7 @@ export class AiService {
     const orderingProtocol =
       `\n\nOrdering protocol — follow this exactly:\n` +
       `- Whenever the customer mentions an item they want (new, or a change to an existing item's quantity/unit), call update_order_items with just that item or items. You do NOT need to repeat items from earlier in the conversation — the system keeps the running list for you.\n` +
+      `- Nigerian money shorthand: "2k", "5k", "10k" means ₦2000 / ₦5000 / ₦10000. NEVER interpret "2k" as 2kg unless they explicitly wrote "2kg" or "2 kg" or "2 kilos". For money, quantity=1 and unit="N2000 worth" (etc).\n` +
       `- If the customer gives a delivery address/location at any point, include it as deliveryAddress in that same call.\n` +
       `- Never call confirm_order until the customer has explicitly confirmed they're done and ready (e.g. "yes", "that's all", "go ahead", "confirm"). Keep using update_order_items as the list grows before that.\n` +
       `- confirm_order takes no item arguments — the system already has the full list from your update_order_items calls.`;
@@ -237,12 +238,12 @@ export class AiService {
                     quantity: {
                       type: 'number',
                       description:
-                        'Numeric amount. Convert fractions to decimals (e.g. "1/2 bag" -> 0.5). If the customer only gave a money amount with no physical unit (e.g. "N5000 worth"), use 1.',
+                        'Physical amount only (kg, bags, pieces). Convert fractions to decimals (e.g. "1/2 bag" -> 0.5). If the customer gave a MONEY amount like "2k", "5k", "N2000", "2 thousand", set quantity to 1 — never treat "2k" as 2kg.',
                     },
                     unit: {
                       type: 'string',
                       description:
-                        'Unit exactly as implied by the customer: kg, bag, congo, piece, tuber, etc. For money-based amounts, use the exact phrase, e.g. "N5000 worth".',
+                        'Physical unit (kg, bag, congo, piece, tuber) OR money phrase. In Nigeria "2k"/"5k" ALWAYS means naira (₦2000/₦5000), NOT kilograms — use unit "N2000 worth" / "N5000 worth". Only use kg if they explicitly said "kg" or "kilo".',
                     },
                   },
                   required: ['name', 'quantity', 'unit'],
@@ -374,11 +375,13 @@ export class AiService {
    * all, in which case it's genuinely just a normal reply.
    */
   private tryRecoverToolCallFromText(content: string): AiChatResult | null {
-    // Groq/Llama often emit: <function=update_order_items({...})> or
-    // <function/update_order_items {...} /> — allow optional ( after the name.
+    // Formats seen from Groq/Llama:
+    //   <function=update_order_items({...})>
+    //   <function(update_order_items){...}</function>
+    //   <function/update_order_items {...} />
     const confirmMatch = /confirm_order/i.test(content);
     const updateMatch = content.match(
-      /update_order_items\s*\(?\s*(\{[\s\S]*\})/i,
+      /update_order_items\s*\)?\s*\(?\s*(\{[\s\S]*\})/i,
     );
 
     if (updateMatch) {
