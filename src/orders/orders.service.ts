@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { OrderStatus, Prisma } from '@prisma/client';
+import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ListOrdersQueryDto, UpdateOrderStatusDto } from './dto/order.dto';
 
@@ -81,6 +81,8 @@ export class OrdersService {
   private serializeListItem(order: {
     id: string;
     status: OrderStatus;
+    paymentStatus: PaymentStatus;
+    paidAt: Date | null;
     total: Prisma.Decimal;
     createdAt: Date;
     customerNotes: string | null;
@@ -93,7 +95,9 @@ export class OrdersService {
       itemsCount: order.items.length,
       total: Number(order.total),
       status: order.status,
-      uiStatus: this.toUiStatus(order.status),
+      paymentStatus: order.paymentStatus,
+      paidAt: order.paidAt,
+      uiStatus: this.toUiStatus(order.status, order.paymentStatus),
       createdAt: order.createdAt,
       customerName: order.customer.name,
       customerPhone: order.customer.whatsappNumber,
@@ -104,6 +108,8 @@ export class OrdersService {
   private serializeDetail(order: {
     id: string;
     status: OrderStatus;
+    paymentStatus: PaymentStatus;
+    paidAt: Date | null;
     total: Prisma.Decimal;
     createdAt: Date;
     updatedAt: Date;
@@ -141,7 +147,9 @@ export class OrdersService {
       id: order.id,
       shortId: order.id.slice(0, 8).toUpperCase(),
       status: order.status,
-      uiStatus: this.toUiStatus(order.status),
+      paymentStatus: order.paymentStatus,
+      paidAt: order.paidAt,
+      uiStatus: this.toUiStatus(order.status, order.paymentStatus),
       detailStatus: this.toDetailStatus(order.status),
       channel: order.channel,
       createdAt: order.createdAt,
@@ -160,23 +168,33 @@ export class OrdersService {
   }
 
   /** Compact badge for the orders table */
-  private toUiStatus(status: OrderStatus): 'Pending' | 'Active' | 'Cancelled' {
+  private toUiStatus(
+    status: OrderStatus,
+    paymentStatus: PaymentStatus,
+  ): 'Pending' | 'Confirmed' | 'Active' | 'Delivered' | 'Cancelled' {
     if (status === OrderStatus.cancelled) return 'Cancelled';
+    if (status === OrderStatus.delivered) return 'Delivered';
     if (
-      status === OrderStatus.pending ||
-      status === OrderStatus.awaiting_payment ||
-      status === OrderStatus.confirmed
+      status === OrderStatus.shopping ||
+      status === OrderStatus.purchased ||
+      status === OrderStatus.dispatched
     ) {
-      return 'Pending';
+      return 'Active';
     }
-    return 'Active';
+    if (status === OrderStatus.confirmed || paymentStatus === PaymentStatus.paid) {
+      return 'Confirmed';
+    }
+    // pending, awaiting_payment — not paid yet
+    return 'Pending';
   }
 
   /** Timeline status for the details modal */
   private toDetailStatus(
     status: OrderStatus,
-  ): 'received' | 'shopping' | 'ready' | 'delivered' {
+  ): 'received' | 'confirmed' | 'shopping' | 'ready' | 'delivered' {
     switch (status) {
+      case OrderStatus.confirmed:
+        return 'confirmed';
       case OrderStatus.shopping:
       case OrderStatus.purchased:
         return 'shopping';
