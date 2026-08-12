@@ -25,6 +25,7 @@ import { ConversationService } from "./conversation.service";
 import { EmailService } from "../email/email.service";
 import { PaystackService } from "../paystack/paystack.service";
 import { parseBudgetNaira, applyBudgetHintsFromMessage, extractBudgetItemsFromMessage } from "./budget.util";
+import { matchCatalogProduct } from "./product-match.util";
 import { randomBytes } from "crypto";
 
 // Deterministic safety net: tool-calling isn't 100% reliable across every
@@ -73,8 +74,23 @@ function looksLikeOrderIntent(text: string): boolean {
   const t = text.trim().toLowerCase();
   return (
     /\b(buy|wan\b|want|order|need|get me|add)\b/.test(t) ||
-    /\b(\d+\s*k\b|\d+\s*thousand|naira|₦|\bkg\b|\bbag\b)\b/.test(t)
+    /\b(\d+\s*k\b|\d+\s*thousand|naira|₦|\bkg\b|\bbag\b|\bkilo\b|\bkilos\b)\b/.test(t)
   );
+}
+
+function looksLikePayNowRequest(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[?.!]/g, "");
+  return (
+    /^pay\s*now$/.test(t) ||
+    /^make\s*payment$/.test(t) ||
+    /^payment\s*link$/.test(t) ||
+    /^send\s*(me\s*)?(the\s*)?pay(ment)?\s*link$/.test(t) ||
+    /^how\s*(do\s*i\s*)?pay$/.test(t)
+  );
+}
+
+function looksLikeSameAddressRequest(text: string): boolean {
+  return /\bsame\s+(address|location|place|delivery)\b/i.test(text);
 }
 
 @Controller("webhooks/whatsapp")
@@ -257,6 +273,39 @@ export class WebhooksController {
       const isDeterministicConfirm =
         CONFIRM_PHRASES.has(normalizeForConfirmCheck(bodyText)) && existingDraft.items.length > 0;
 
+      if (!isDeterministicConfirm && looksLikePayNowRequest(bodyText)) {
+        const handled = await this.handlePayNowRequest(
+          customer.id,
+          conversation.id,
+          whatsappNumber,
+        );
+        if (handled) return;
+      }
+
+      // "Same address" → reuse last delivery address from a prior order
+      if (!isDeterministicConfirm && looksLikeSameAddressRequest(bodyText)) {
+        const lastAddress = await this.getLastDeliveryAddress(customer.id);
+        if (lastAddress) {
+          const { items, deliveryAddress } = await this.conversations.mergeDraft(
+            conversation.id,
+            [],
+            lastAddress,
+          );
+          let draftSummary = `Noted! Here's your list so far:\n\n`;
+          if (items.length === 0) {
+            draftSummary += `(No items yet — drop wetin you wan buy.)\n`;
+          } else {
+            items.forEach((item) => {
+              draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
+            });
+          }
+          draftSummary += `\n📍 Delivery to: ${deliveryAddress}`;
+          draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
+          await this.sendAndLog(customer.id, conversation.id, whatsappNumber, draftSummary);
+          return;
+        }
+      }
+
       // Cart/list questions must read the real draft — never let the model invent items
       if (!isDeterministicConfirm && looksLikeCartRequest(bodyText)) {
         if (existingDraft.items.length === 0) {
@@ -288,23 +337,35 @@ export class WebhooksController {
       const resolved = this.resolveDraftFromAiOrMessage(bodyText, aiResult);
 
       if (resolved?.type === "draft_update") {
-        const { items, deliveryAddress } = await this.conversations.mergeDraft(
-          conversation.id,
-          resolved.items,
-          resolved.deliveryAddress,
-        );
+        if (
+          resolved.items.length === 0 &&
+          !resolved.deliveryAddress &&
+          existingDraft.items.length === 0
+        ) {
+          // empty no-op — fall through
+        } else {
+          const { items, deliveryAddress } = await this.conversations.mergeDraft(
+            conversation.id,
+            resolved.items,
+            resolved.deliveryAddress,
+          );
 
-        let draftSummary = `Noted! Here's your list so far:\n\n`;
-        items.forEach((item) => {
-          draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
-        });
-        draftSummary += deliveryAddress
-          ? `\n📍 Delivery to: ${deliveryAddress}`
-          : `\n⚠️ Still need your delivery address — just drop it whenever you're ready.`;
-        draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
+          let draftSummary = `Noted! Here's your list so far:\n\n`;
+          if (items.length === 0) {
+            draftSummary += `(No items yet — drop wetin you wan buy.)\n`;
+          } else {
+            items.forEach((item) => {
+              draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
+            });
+          }
+          draftSummary += deliveryAddress
+            ? `\n📍 Delivery to: ${deliveryAddress}`
+            : `\n⚠️ Still need your delivery address — just drop it whenever you're ready.`;
+          draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
 
-        await this.sendAndLog(customer.id, conversation.id, whatsappNumber, draftSummary);
-        return;
+          await this.sendAndLog(customer.id, conversation.id, whatsappNumber, draftSummary);
+          return;
+        }
       }
 
       if (resolved?.type === "confirm_order") {
@@ -468,6 +529,10 @@ export class WebhooksController {
             customerInvoiceReceipt += `\n\nPayment link no gree open just now — our team go send am sharp-sharp. 🙏`;
           }
         } else {
+          const unpriced = pricedItems.filter((i) => i.unitPrice <= 0).map((i) => i.name);
+          this.logger.warn(
+            `Order ${createdOrder.id}: no payment link — allPriced=${allPriced} total=₦${totalNaira} paystack=${this.paystack.isConfigured()} unpriced=[${unpriced.join(", ")}]`,
+          );
           customerInvoiceReceipt += `\n\nOur market shoppers are handling it. We will send over your subtotal breakdown once pricing finishes! 🙏`;
         }
 
@@ -581,12 +646,9 @@ export class WebhooksController {
       where: { isAvailable: true },
       select: { id: true, name: true, unit: true, currentPrice: true },
     });
-    const byName = new Map(
-      products.map((p) => [p.name.trim().toLowerCase(), p]),
-    );
 
     return items.map((item) => {
-      const match = byName.get(item.name.trim().toLowerCase());
+      const match = matchCatalogProduct(item.name, products);
       const quantity = Number(item.quantity) || 0;
       const budget = parseBudgetNaira(item.unit, item.name);
 
@@ -604,7 +666,7 @@ export class WebhooksController {
 
       const unitPrice = match ? Number(match.currentPrice) : 0;
       return {
-        name: item.name,
+        name: match?.name ?? item.name,
         quantity,
         unit: match?.unit || item.unit,
         productId: match?.id ?? null,
@@ -612,6 +674,167 @@ export class WebhooksController {
         lineTotal: unitPrice * quantity,
       };
     });
+  }
+
+  private async getLastDeliveryAddress(customerId: string): Promise<string | null> {
+    const last = await this.prisma.order.findFirst({
+      where: { customerId, customerNotes: { not: null } },
+      orderBy: { createdAt: "desc" },
+      select: { customerNotes: true },
+    });
+    const addr = last?.customerNotes?.trim();
+    return addr || null;
+  }
+
+  /** Resend Paystack link for the customer's latest unpaid order. */
+  private async handlePayNowRequest(
+    customerId: string,
+    conversationId: string,
+    whatsappNumber: string,
+  ): Promise<boolean> {
+    const order = await this.prisma.order.findFirst({
+      where: {
+        customerId,
+        paymentStatus: { in: [PaymentStatus.unpaid, PaymentStatus.pending] },
+        status: { in: [OrderStatus.pending, OrderStatus.awaiting_payment] },
+      },
+      orderBy: { createdAt: "desc" },
+      include: { items: true },
+    });
+
+    if (!order) {
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        `I no see any open order waiting for payment 🙏 — drop a fresh list, or check if you already paid.`,
+      );
+      return true;
+    }
+
+    const totalNaira = Number(order.total);
+    let paymentUrl = order.paymentUrl;
+    let displayTotal = totalNaira;
+
+    // Order was placed before pricing — try catalog again, then Paystack
+    if (totalNaira < 1 || !paymentUrl) {
+      const repriced = await this.repriceOrderItems(order.id, order.items);
+      displayTotal = repriced.total;
+      if (displayTotal >= 1 && this.paystack.isConfigured() && order.paystackReference) {
+        const payEmail = `${whatsappNumber.replace(/\D/g, "")}@whatsapp.ojarun.ng`;
+        const webAppUrl = this.config.get<string>("webAppUrl") || "";
+        let reference = order.paystackReference;
+        let payment = await this.paystack.initializeTransaction({
+          email: payEmail,
+          amountNaira: displayTotal,
+          reference,
+          callbackUrl: webAppUrl
+            ? `${webAppUrl.replace(/\/$/, "")}/payment/callback`
+            : undefined,
+          metadata: { orderId: order.id, channel: "whatsapp", customerId },
+        });
+        if (!payment.ok && /reference/i.test(payment.error || "")) {
+          reference = `oja_${randomBytes(8).toString("hex")}`;
+          payment = await this.paystack.initializeTransaction({
+            email: payEmail,
+            amountNaira: displayTotal,
+            reference,
+            callbackUrl: webAppUrl
+              ? `${webAppUrl.replace(/\/$/, "")}/payment/callback`
+              : undefined,
+            metadata: { orderId: order.id, channel: "whatsapp", customerId },
+          });
+        }
+        if (payment.ok && payment.authorizationUrl) {
+          paymentUrl = payment.authorizationUrl;
+          await this.prisma.order.update({
+            where: { id: order.id },
+            data: {
+              total: new Prisma.Decimal(displayTotal.toFixed(2)),
+              status: OrderStatus.awaiting_payment,
+              paymentStatus: PaymentStatus.pending,
+              paymentUrl,
+              paystackReference: reference,
+            },
+          });
+        }
+      }
+
+      if (!paymentUrl) {
+        await this.sendAndLog(
+          customerId,
+          conversationId,
+          whatsappNumber,
+          `Your order *${order.id.slice(0, 8).toUpperCase()}* dey wait for pricing still 🙏\n\nAdd *Titus* (and other items) with prices in admin, or customer can send budget amounts like "titus 5k".`,
+        );
+        return true;
+      }
+    }
+
+    let body = `Here's your payment link again 💳\n\n`;
+    order.items.forEach((item) => {
+      body += `🔸 *${item.productNameSnapshot}* — ${item.quantity} ${item.unitSnapshot}\n`;
+    });
+    if (order.customerNotes) {
+      body += `\n📍 *Delivery to:* ${order.customerNotes}`;
+    }
+    body += `\n\n💰 *Total:* ₦${displayTotal.toLocaleString("en-NG")}`;
+    body += `\n\nTap *Pay now* below to complete checkout. 🙏`;
+
+    await this.sendPaymentAndLog(
+      customerId,
+      conversationId,
+      whatsappNumber,
+      body,
+      paymentUrl!,
+    );
+    return true;
+  }
+
+  /** Re-price order line items from catalog (e.g. after admin adds Titus). */
+  private async repriceOrderItems(
+    orderId: string,
+    items: Array<{
+      id: string;
+      productNameSnapshot: string;
+      unitSnapshot: string;
+      quantity: { toString(): string };
+      unitPriceSnapshot: { toString(): string };
+    }>,
+  ): Promise<{ total: number; allPriced: boolean }> {
+    const priced = await this.priceDraftItems(
+      items.map((i) => ({
+        name: i.productNameSnapshot,
+        quantity: Number(i.quantity),
+        unit: i.unitSnapshot,
+      })),
+    );
+
+    let total = 0;
+    let allPriced = true;
+    for (let i = 0; i < items.length; i++) {
+      const line = priced[i];
+      if (line.unitPrice <= 0) allPriced = false;
+      total += line.lineTotal;
+      if (line.unitPrice > 0) {
+        await this.prisma.orderItem.update({
+          where: { id: items[i].id },
+          data: {
+            unitPriceSnapshot: new Prisma.Decimal(line.unitPrice.toFixed(2)),
+            productId: line.productId,
+          },
+        });
+      }
+    }
+
+    if (allPriced && total >= 1) {
+      await this.prisma.order.update({
+        where: { id: orderId },
+        data: { total: new Prisma.Decimal(total.toFixed(2)) },
+      });
+    }
+
+    return { total, allPriced };
   }
 
   /**
