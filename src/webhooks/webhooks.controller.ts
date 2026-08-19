@@ -20,7 +20,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { WhatsappService } from "../whatsapp/whatsapp.service";
 import { WhatsappSignatureGuard } from "./signature.guard";
 import { getDeliveryWindow } from "./delivery.util";
-import { AiService, AiChatResult } from "./ai.service";
+import { AiService, AiChatResult, OrderDraftItem } from "./ai.service";
 import { ConversationService } from "./conversation.service";
 import { EmailService } from "../email/email.service";
 import { PaystackService } from "../paystack/paystack.service";
@@ -251,6 +251,24 @@ export class WebhooksController {
       return;
     }
 
+    // ===== NEW: Check if we're in the middle of asking for quantities =====
+    const pendingItems = await this.conversations.getPendingItems(conversation.id);
+    if (pendingItems.length > 0 && bodyText) {
+      // Customer is responding to a quantity question
+      const handled = await this.handleQuantityResponse(
+        customer.id,
+        conversation.id,
+        whatsappNumber,
+        bodyText,
+        pendingItems,
+      );
+      if (handled) {
+        // Touch the conversation to keep it active
+        await this.conversations.touch(conversation.id);
+        return;
+      }
+    }
+
     // 6. Fallback static keyword router
     const replyKey = this.resolveReplyKey(bodyText, isNewCustomer);
 
@@ -337,13 +355,28 @@ export class WebhooksController {
       const resolved = this.resolveDraftFromAiOrMessage(bodyText, aiResult);
 
       if (resolved?.type === "draft_update") {
-        if (
-          resolved.items.length === 0 &&
-          !resolved.deliveryAddress &&
-          existingDraft.items.length === 0
-        ) {
-          // empty no-op — fall through
-        } else {
+        // ===== NEW: Extract items without quantities and ask for them =====
+        const itemsWithoutQuantities = resolved.items.filter(
+          item => item.quantity <= 0 || item.unit === 'pieces' && item.quantity === 1
+        );
+
+        if (itemsWithoutQuantities.length > 0 && !resolved.deliveryAddress) {
+          // Store the items that need quantities
+          const itemNames = itemsWithoutQuantities.map(item => item.name);
+          await this.conversations.setPendingItems(conversation.id, itemNames);
+          
+          // Ask for the first item's quantity
+          await this.sendAndLog(
+            customer.id,
+            conversation.id,
+            whatsappNumber,
+            `Got it! Let me get the quantities:\n\nHow much *${itemNames[0]}* do you want? (e.g., "2 cups", "1 kg", "N500 worth")`
+          );
+          return;
+        }
+
+        // Items already have quantities, merge them normally
+        if (resolved.items.length > 0) {
           const { items, deliveryAddress } = await this.conversations.mergeDraft(
             conversation.id,
             resolved.items,
@@ -437,6 +470,7 @@ export class WebhooksController {
         });
 
         await this.conversations.clearDraft(conversation.id);
+        await this.conversations.clearPendingItems(conversation.id);
         await this.conversations.closeSession(conversation.id);
 
         // Fire-and-forget — don't make the customer wait on this. Without
@@ -578,6 +612,64 @@ export class WebhooksController {
     }
 
     await this.sendAndLog(customer.id, conversation.id, whatsappNumber, staticMessageBody);
+  }
+
+  // ===== NEW: Handle quantity responses =====
+  private async handleQuantityResponse(
+    customerId: string,
+    conversationId: string,
+    whatsappNumber: string,
+    bodyText: string,
+    pendingItems: string[],
+  ): Promise<boolean> {
+    // Parse the quantity from the customer's message
+    const quantity = this.conversations.parseQuantity(bodyText);
+    
+    if (!quantity) {
+      // Invalid quantity format - ask again
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        `Sorry, I no catch that 🙏 — please tell me how much *${pendingItems[0]}* you want (e.g., "2 cups", "1 kg", "N500 worth")`
+      );
+      return true;
+    }
+
+    // Store the item with its quantity
+    const currentItem = pendingItems[0];
+    await this.conversations.mergeDraft(
+      conversationId,
+      [{ name: currentItem, quantity: quantity.value, unit: quantity.unit }],
+      null
+    );
+
+    // Remove the completed item from pending
+    pendingItems.shift();
+    await this.conversations.setPendingItems(conversationId, pendingItems);
+
+    if (pendingItems.length > 0) {
+      // Ask for the next item
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        `Great! ✅ ${quantity.value} ${quantity.unit} of ${currentItem} added.\n\nHow much *${pendingItems[0]}* do you want? (e.g., "2 cups", "1 kg", "N500 worth")`
+      );
+    } else {
+      // All items have quantities - show the full list
+      const draft = await this.conversations.getDraft(conversationId);
+      let summary = `Noted! Here's your list so far:\n\n`;
+      draft.items.forEach((item) => {
+        summary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
+      });
+      summary += `\n📍 Still need your delivery address — just drop it whenever you're ready.`;
+      summary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
+      
+      await this.sendAndLog(customerId, conversationId, whatsappNumber, summary);
+    }
+
+    return true;
   }
 
   /**

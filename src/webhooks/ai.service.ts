@@ -31,7 +31,7 @@ export class AiService {
     const text = userMessage.trim().toUpperCase();
 
     const dynamicGreetings = [
-      `Aba! 👋 Welcome to OjaRun! I dey here sharp-sharp to run your market errands for Ibadan. Drop your shopping list or let me know wetin you wan buy today! 🛍️`,
+      `Aba! 👋 Welcome to OjaRun! I dey here sharp-sharp to run your market errands for Ibadan. Drop your shopping list or tell me wetin you wan buy today! 🛍️`,
       `How far! 👋 OjaRun dey here for you. Tell me wetin you wan buy from market today make we go help you buy am sharp-sharp! 🍅`,
       `Oya let's go! 🚀 Welcome to OjaRun. Wetin we dey buy from Ibadan market today? Just drop the list make I arrange am for you.`,
       `Aba, how body? 👋 OjaRun service active! Drop your market list here make we run the errand for you sharp-sharp! 🛒`,
@@ -206,7 +206,10 @@ export class AiService {
 
     const orderingProtocol =
       `\n\nOrdering protocol — follow this exactly:\n` +
-      `- Whenever the customer mentions an item they want (new, or a change to an existing item's quantity/unit), call update_order_items with just that item or items. You do NOT need to repeat items from earlier in the conversation — the system keeps the running list for you.\n` +
+      `- When the customer mentions items they want (e.g., "I want to buy beans, Garri, Pepper"), DO NOT automatically assign quantities or prices. Instead, ask for quantities one at a time.\n` +
+      `- If the customer lists multiple items without quantities, respond with a friendly question asking for the quantity of the FIRST item only. Example: "How much beans do you want? (e.g., '2 cups', '1 kg', 'N500 worth')"\n` +
+      `- After the customer gives the quantity for one item, store it and ask for the next item's quantity. Continue this pattern until all items have quantities.\n` +
+      `- Only call update_order_items when the customer has provided BOTH the item name AND its quantity/amount.\n` +
       `- Nigerian money shorthand: "2k", "5k", "10k" means ₦2000 / ₦5000 / ₦10000. NEVER interpret "2k" as 2kg unless they explicitly wrote "2kg" or "2 kg" or "2 kilos". For money, quantity=1 and unit="N2000 worth" (etc).\n` +
       `- If the customer gives a delivery address/location at any point, include it as deliveryAddress in that same call.\n` +
       `- Never call confirm_order until the customer has explicitly confirmed they're done and ready (e.g. "yes", "that's all", "go ahead", "confirm"). Keep using update_order_items as the list grows before that.\n` +
@@ -224,13 +227,13 @@ export class AiService {
         function: {
           name: 'update_order_items',
           description:
-            'Call this whenever the customer mentions an item to buy — new items, or a change to an existing one. Only include what changed this turn; the system merges it into the running list for you.',
+            'Call this whenever the customer mentions an item with a quantity/amount. Only include what was specified this turn; the system merges it into the running list for you.',
           parameters: {
             type: 'object',
             properties: {
               items: {
                 type: 'array',
-                description: 'Items mentioned or changed this turn — not the full running list.',
+                description: 'Items with quantities mentioned this turn — not the full running list.',
                 items: {
                   type: 'object',
                   properties: {
@@ -275,13 +278,13 @@ export class AiService {
       {
         name: 'update_order_items',
         description:
-          'Call this whenever the customer mentions an item to buy — new items, or a change to an existing one. Only include what changed this turn; the system merges it into the running list for you.',
+          'Call this whenever the customer mentions an item with a quantity/amount. Only include what changed this turn; the system merges it into the running list for you.',
         input_schema: {
           type: 'object',
           properties: {
             items: {
               type: 'array',
-              description: 'Items mentioned or changed this turn — not the full running list.',
+              description: 'Items with quantities mentioned this turn — not the full running list.',
               items: {
                 type: 'object',
                 properties: {
@@ -322,13 +325,13 @@ export class AiService {
           {
             name: 'update_order_items',
             description:
-              'Call this whenever the customer mentions an item to buy — new items, or a change to an existing one. Only include what changed this turn; the system merges it into the running list for you.',
+              'Call this whenever the customer mentions an item with a quantity/amount. Only include what changed this turn; the system merges it into the running list for you.',
             parameters: {
               type: 'OBJECT',
               properties: {
                 items: {
                   type: 'ARRAY',
-                  description: 'Items mentioned or changed this turn — not the full running list.',
+                  description: 'Items with quantities mentioned this turn — not the full running list.',
                   items: {
                     type: 'OBJECT',
                     properties: {

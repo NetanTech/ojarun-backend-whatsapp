@@ -115,6 +115,80 @@ export class ConversationService {
     });
   }
 
+  // ===== NEW METHODS FOR PENDING ITEMS =====
+
+  /**
+   * Store items that need quantities (pending items)
+   */
+  async setPendingItems(sessionId: string, items: string[]): Promise<void> {
+    await this.prisma.chatSession.update({
+      where: { id: sessionId },
+      data: {
+        pendingItems: items as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+
+  /**
+   * Get items that still need quantities
+   */
+  async getPendingItems(sessionId: string): Promise<string[]> {
+    const session = await this.prisma.chatSession.findUniqueOrThrow({ where: { id: sessionId } });
+    return (session.pendingItems as unknown as string[] | null) ?? [];
+  }
+
+  /**
+   * Clear pending items after all quantities are collected
+   */
+  async clearPendingItems(sessionId: string): Promise<void> {
+    await this.prisma.chatSession.update({
+      where: { id: sessionId },
+      data: { pendingItems: Prisma.JsonNull },
+    });
+  }
+
+  /**
+   * Parse quantity from customer message
+   * Returns { value: number, unit: string } or null if not a valid quantity
+   */
+  parseQuantity(message: string): { value: number; unit: string } | null {
+    const text = message.trim().toLowerCase();
+    
+    // Check for money amounts: "2k", "N500", "500 naira", etc.
+    const moneyMatch = text.match(/(?:[n₦]\s*)?(\d+(?:\.\d+)?)\s*(?:k\b|thousand|naira|ngn|worth)/i);
+    if (moneyMatch) {
+      let amount = Number(moneyMatch[1]);
+      if (text.includes('k') || text.includes('thousand')) {
+        amount *= 1000;
+      }
+      if (amount >= 100) {
+        return { value: 1, unit: `N${Math.round(amount)} worth` };
+      }
+    }
+
+    // Check for weight: "2 kg", "1.5kg", "2 kilos"
+    const weightMatch = text.match(/(\d+(?:\.\d+)?)\s*(kg|kilo|kilos|g|grams?)\b/i);
+    if (weightMatch) {
+      return { value: Number(weightMatch[1]), unit: weightMatch[2].toLowerCase() };
+    }
+
+    // Check for count: "3 pieces", "5 pcs", "2 cups"
+    const countMatch = text.match(/(\d+(?:\.\d+)?)\s*(piece|pcs|cup|cups|bag|bags|bottle|bottles|can|cans|pack|packs|tuber|tubers|congo|tray|trays)\b/i);
+    if (countMatch) {
+      return { value: Number(countMatch[1]), unit: countMatch[2].toLowerCase() };
+    }
+
+    // Check for simple number only (assume pieces)
+    const numberMatch = text.match(/^(\d+(?:\.\d+)?)\s*$/);
+    if (numberMatch) {
+      return { value: Number(numberMatch[1]), unit: 'pieces' };
+    }
+
+    return null;
+  }
+
+  // ===== END NEW METHODS =====
+
   /**
    * Closes a session immediately rather than waiting for the idle timeout.
    * Called right after an order is confirmed — a confirmed order is a
