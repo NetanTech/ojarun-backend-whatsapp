@@ -1,16 +1,26 @@
 import { Module } from '@nestjs/common';
-import { ScheduleModule } from '@nestjs/schedule';
 import { WebhooksController } from './webhooks.controller';
-import { WhatsappSignatureGuard } from './signature.guard';
-import { WhatsappModule } from '../whatsapp/whatsapp.module';
-import { PaystackModule } from '../paystack/paystack.module';
-import { ReminderService } from './reminder.service';
+import { AddressValidationService } from './address-validation.service';
 import { AiService } from './ai.service';
 import { ConversationService } from './conversation.service';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
+import { PrismaModule } from '../prisma/prisma.module';
+import { EmailModule } from '../email/email.module';
+import { PaystackModule } from '../paystack/paystack.module';
 
 @Module({
-  imports: [WhatsappModule, PaystackModule, ScheduleModule.forRoot()],
+  imports: [
+    WhatsappModule,
+    PrismaModule,
+    EmailModule,
+    PaystackModule,
+  ],
   controllers: [WebhooksController],
-  providers: [WhatsappSignatureGuard, ReminderService, AiService, ConversationService],
+  providers: [
+    AiService,              // 👈 Register the service directly
+    ConversationService,    // 👈 Register the service directly
+    AddressValidationService,
+  ],
+  exports: [AddressValidationService],
 })
 export class WebhooksModule {}

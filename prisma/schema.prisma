@@ -159,6 +159,7 @@ model ChatSession {
    pendingItems          Json?     
   draftItems           Json?             @map("draft_items")
   draftDeliveryAddress String?           @map("draft_delivery_address")
+    draftDeliveryAddressMeta Json?   
   messages             Message[]
 
   @@index([customerId, status])

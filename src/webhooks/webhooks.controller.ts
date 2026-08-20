@@ -24,6 +24,7 @@ import { AiService, AiChatResult, OrderDraftItem } from "./ai.service";
 import { ConversationService } from "./conversation.service";
 import { EmailService } from "../email/email.service";
 import { PaystackService } from "../paystack/paystack.service";
+import { AddressValidationService } from "./address-validation.service"; // 👈 ADD THIS
 import { parseBudgetNaira, applyBudgetHintsFromMessage, extractBudgetItemsFromMessage } from "./budget.util";
 import { matchCatalogProduct } from "./product-match.util";
 import { randomBytes } from "crypto";
@@ -93,6 +94,38 @@ function looksLikeSameAddressRequest(text: string): boolean {
   return /\bsame\s+(address|location|place|delivery)\b/i.test(text);
 }
 
+// ===== NEW: Check if message looks like an address =====
+function looksLikeAddress(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  // Must be at least 5 characters
+  if (t.length < 5) return false;
+  
+  // Check for address indicators
+  const addressIndicators = [
+    'ibadan', 'ui', 'gate', 'road', 'street', 'avenue', 
+    'close', 'crescent', 'drive', 'lane', 'way', 'boulevard',
+    'estate', 'village', 'town', 'area', 'junction', 'roundabout',
+    'behind', 'beside', 'near', 'opposite', 'along',
+    'house', 'flat', 'apartment', 'block', 'plot'
+  ];
+  
+  const hasIndicator = addressIndicators.some(indicator => t.includes(indicator));
+  if (hasIndicator) return true;
+  
+  // Check for numbers + road/street pattern
+  if (/\d+\s+(road|street|avenue|close|drive|lane)/i.test(t)) return true;
+  
+  // Check for known Ibadan areas
+  const ibadanAreas = [
+    'bodija', 'soka', 'agodi', 'alaafin', 'apata', 'challenge',
+    'eleyele', 'gbagi', 'jericho', 'mokola', 'monatan', 'ojo',
+    'sabo', 'tanki', 'uch', 'ui', 'university of ibadan',
+    'oyoroad', 'ringroad', 'dugbe', 'oke ado', 'oke aro'
+  ];
+  
+  return ibadanAreas.some(area => t.includes(area));
+}
+
 @Controller("webhooks/whatsapp")
 export class WebhooksController {
   private readonly logger = new Logger(WebhooksController.name);
@@ -105,6 +138,7 @@ export class WebhooksController {
     private readonly conversations: ConversationService,
     private readonly email: EmailService,
     private readonly paystack: PaystackService,
+    private readonly addressValidation: AddressValidationService, // 👈 ADD THIS
   ) {}
 
   @Get()
@@ -251,10 +285,9 @@ export class WebhooksController {
       return;
     }
 
-    // ===== NEW: Check if we're in the middle of asking for quantities =====
+    // ===== CHECK: If we're in the middle of asking for quantities =====
     const pendingItems = await this.conversations.getPendingItems(conversation.id);
     if (pendingItems.length > 0 && bodyText) {
-      // Customer is responding to a quantity question
       const handled = await this.handleQuantityResponse(
         customer.id,
         conversation.id,
@@ -263,7 +296,20 @@ export class WebhooksController {
         pendingItems,
       );
       if (handled) {
-        // Touch the conversation to keep it active
+        await this.conversations.touch(conversation.id);
+        return;
+      }
+    }
+
+    // ===== NEW: Check if this looks like an address input =====
+    if (bodyText && looksLikeAddress(bodyText)) {
+      const addressHandled = await this.handleAddressInput(
+        customer.id,
+        conversation.id,
+        whatsappNumber,
+        bodyText,
+      );
+      if (addressHandled) {
         await this.conversations.touch(conversation.id);
         return;
       }
@@ -280,13 +326,8 @@ export class WebhooksController {
       });
     }
 
-    // 7. Dynamic AI conversation routing, now with cross-conversation
-    // customer context (contextSummary) baked into the system prompt.
+    // 7. Dynamic AI conversation routing
     if (replyKey === "default" && bodyText) {
-      // Check for an exact, unambiguous confirmation phrase first — only
-      // treated as a confirmation when there's actually a non-empty draft
-      // to confirm, so "done" or "that's it" said in some other context
-      // doesn't accidentally trigger this.
       const existingDraft = await this.conversations.getDraft(conversation.id);
       const isDeterministicConfirm =
         CONFIRM_PHRASES.has(normalizeForConfirmCheck(bodyText)) && existingDraft.items.length > 0;
@@ -304,11 +345,14 @@ export class WebhooksController {
       if (!isDeterministicConfirm && looksLikeSameAddressRequest(bodyText)) {
         const lastAddress = await this.getLastDeliveryAddress(customer.id);
         if (lastAddress) {
+          // Validate the last address
+          const validated = await this.addressValidation.validateAddress(lastAddress);
           const { items, deliveryAddress } = await this.conversations.mergeDraft(
             conversation.id,
             [],
             lastAddress,
           );
+          
           let draftSummary = `Noted! Here's your list so far:\n\n`;
           if (items.length === 0) {
             draftSummary += `(No items yet — drop wetin you wan buy.)\n`;
@@ -317,7 +361,16 @@ export class WebhooksController {
               draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
             });
           }
-          draftSummary += `\n📍 Delivery to: ${deliveryAddress}`;
+          
+          if (validated) {
+            draftSummary += `\n📍 *Delivery to:* ${validated.formatted}`;
+            if (validated.neighborhood) {
+              draftSummary += `\n📍 *Area:* ${validated.neighborhood}`;
+            }
+          } else {
+            draftSummary += `\n📍 *Delivery to:* ${deliveryAddress}`;
+          }
+          
           draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
           await this.sendAndLog(customer.id, conversation.id, whatsappNumber, draftSummary);
           return;
@@ -351,21 +404,17 @@ export class WebhooksController {
         ? { type: "confirm_order" }
         : await this.ai.chat(bodyText, formattedHistory, customer.contextSummary ?? null);
 
-      // If the model failed / leaked tools, still parse Nigerian "item 2k" budgets
       const resolved = this.resolveDraftFromAiOrMessage(bodyText, aiResult);
 
       if (resolved?.type === "draft_update") {
-        // ===== NEW: Extract items without quantities and ask for them =====
         const itemsWithoutQuantities = resolved.items.filter(
-          item => item.quantity <= 0 || item.unit === 'pieces' && item.quantity === 1
+          item => item.quantity <= 0 || (item.unit === 'pieces' && item.quantity === 1)
         );
 
         if (itemsWithoutQuantities.length > 0 && !resolved.deliveryAddress) {
-          // Store the items that need quantities
           const itemNames = itemsWithoutQuantities.map(item => item.name);
           await this.conversations.setPendingItems(conversation.id, itemNames);
           
-          // Ask for the first item's quantity
           await this.sendAndLog(
             customer.id,
             conversation.id,
@@ -375,7 +424,6 @@ export class WebhooksController {
           return;
         }
 
-        // Items already have quantities, merge them normally
         if (resolved.items.length > 0) {
           const { items, deliveryAddress } = await this.conversations.mergeDraft(
             conversation.id,
@@ -391,9 +439,24 @@ export class WebhooksController {
               draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
             });
           }
-          draftSummary += deliveryAddress
-            ? `\n📍 Delivery to: ${deliveryAddress}`
-            : `\n⚠️ Still need your delivery address — just drop it whenever you're ready.`;
+          
+          // Check if we have a validated address
+          const addressInfo = await this.conversations.getDeliveryAddress(conversation.id);
+          if (addressInfo.address) {
+            if (addressInfo.formatted) {
+              draftSummary += `\n📍 *Delivery to:* ${addressInfo.formatted}`;
+            } else {
+              draftSummary += `\n📍 *Delivery to:* ${addressInfo.address}`;
+            }
+            if (addressInfo.neighborhood) {
+              draftSummary += `\n📍 *Area:* ${addressInfo.neighborhood}`;
+            }
+          } else if (deliveryAddress) {
+            draftSummary += `\n📍 *Delivery to:* ${deliveryAddress}`;
+          } else {
+            draftSummary += `\n⚠️ Still need your delivery address — just drop it whenever you're ready.`;
+          }
+          
           draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
 
           await this.sendAndLog(customer.id, conversation.id, whatsappNumber, draftSummary);
@@ -402,10 +465,8 @@ export class WebhooksController {
       }
 
       if (resolved?.type === "confirm_order") {
-        // The draft (not anything the model just said) is the source of
-        // truth here — it was built up incrementally across every
-        // update_order_items call, so it can't be missing earlier items.
         const draft = await this.conversations.getDraft(conversation.id);
+        const addressInfo = await this.conversations.getDeliveryAddress(conversation.id);
 
         if (draft.items.length === 0) {
           await this.sendAndLog(
@@ -417,7 +478,7 @@ export class WebhooksController {
           return;
         }
 
-        if (!draft.deliveryAddress) {
+        if (!draft.deliveryAddress && !addressInfo.address) {
           await this.sendAndLog(
             customer.id,
             conversation.id,
@@ -426,6 +487,9 @@ export class WebhooksController {
           );
           return;
         }
+
+        // Use the validated address if available
+        const finalAddress = addressInfo.formatted || addressInfo.address || draft.deliveryAddress;
 
         const pricedItems = await this.priceDraftItems(draft.items);
         const totalNaira = pricedItems.reduce(
@@ -448,7 +512,7 @@ export class WebhooksController {
               status: OrderStatus.pending,
               paymentStatus: PaymentStatus.unpaid,
               total: new Prisma.Decimal(totalNaira.toFixed(2)),
-              customerNotes: draft.deliveryAddress,
+              customerNotes: finalAddress,
               paystackReference: paystackRef,
             },
           });
@@ -473,24 +537,18 @@ export class WebhooksController {
         await this.conversations.clearPendingItems(conversation.id);
         await this.conversations.closeSession(conversation.id);
 
-        // Fire-and-forget — don't make the customer wait on this. Without
-        // it, there's a real memory gap of up to 15 minutes (until the
-        // cron's next pass) where the bot has no idea this order was just
-        // placed if the customer says anything else right away.
         this.conversations
           .summarizeSession(conversation.id)
           .catch((err) => this.logger.error(`Immediate summarization failed for session ${conversation.id}`, err));
 
         this.logger.log(`Order processed transactionally for ${whatsappNumber}`);
 
-        // Fire-and-forget — EmailService catches its own errors, so a broken
-        // mail provider can never delay or block the customer's confirmation.
         void this.email.sendNewOrderNotification({
           orderId: createdOrder.id,
           customerName: customer.name,
           whatsappNumber,
           items: draft.items,
-          deliveryAddress: draft.deliveryAddress,
+          deliveryAddress: finalAddress,
           createdAt: createdOrder.createdAt,
         });
 
@@ -503,11 +561,12 @@ export class WebhooksController {
               : "";
           customerInvoiceReceipt += `🔸 *${item.name}* — ${item.quantity} ${item.unit}${priceBit}\n`;
         });
-        customerInvoiceReceipt += `\n📍 *Delivery to:* ${draft.deliveryAddress}`;
+        customerInvoiceReceipt += `\n📍 *Delivery to:* ${finalAddress}`;
+        if (addressInfo.neighborhood) {
+          customerInvoiceReceipt += `\n📍 *Area:* ${addressInfo.neighborhood}`;
+        }
         customerInvoiceReceipt += `\n🚴 *Delivery Schedule:* ${window} ${day}`;
 
-        // Charge when every line has a price (catalog match OR customer budget
-        // like "fish 2 thousand" → ₦2000). Otherwise keep the pricing-wait copy.
         if (allPriced && totalNaira >= 1) {
           customerInvoiceReceipt += `\n\n💰 *Subtotal:* ₦${totalNaira.toLocaleString("en-NG")}`;
 
@@ -575,7 +634,6 @@ export class WebhooksController {
       }
 
       if (resolved?.type === "text") {
-        // Never forward hallucinated tool syntax to WhatsApp
         if (
           /<function[=/(]|update_order_items\s*\)?\s*\(?\s*\{|confirm_order\s*\(/i.test(
             resolved.content,
@@ -589,8 +647,6 @@ export class WebhooksController {
         await this.sendAndLog(customer.id, conversation.id, whatsappNumber, resolved.content);
         return;
       }
-      // resolved === null means the provider call failed — fall through to
-      // the static fallback below instead of leaving the customer with nothing.
     }
 
     // 8. Static keyed fallback route
@@ -614,7 +670,64 @@ export class WebhooksController {
     await this.sendAndLog(customer.id, conversation.id, whatsappNumber, staticMessageBody);
   }
 
-  // ===== NEW: Handle quantity responses =====
+  // ===== NEW: Handle address input =====
+  private async handleAddressInput(
+    customerId: string,
+    conversationId: string,
+    whatsappNumber: string,
+    bodyText: string,
+  ): Promise<boolean> {
+    // Validate the address
+    const result = await this.addressValidation.validateAndFormatResponse(bodyText);
+
+    if (!result.valid) {
+      // Address is invalid - show helpful message
+      await this.sendAndLog(customerId, conversationId, whatsappNumber, result.message);
+      return true;
+    }
+
+    // Address is valid - store it with metadata
+    if (result.validatedAddress) {
+      await this.conversations.setDeliveryAddress(
+        conversationId,
+        result.validatedAddress.fullAddress,
+        {
+          formatted: result.validatedAddress.formatted,
+          neighborhood: result.validatedAddress.neighborhood,
+          landmark: result.validatedAddress.landmark,
+        }
+      );
+
+      // Get current draft to show full list with address
+      const draft = await this.conversations.getDraft(conversationId);
+      const addressInfo = await this.conversations.getDeliveryAddress(conversationId);
+      
+      let draftSummary = `Noted! Here's your list so far:\n\n`;
+      
+      if (draft.items.length === 0) {
+        draftSummary += `(No items yet — drop wetin you wan buy.)\n`;
+      } else {
+        draft.items.forEach((item) => {
+          draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
+        });
+      }
+      
+      draftSummary += `\n📍 *Delivery to:* ${addressInfo.formatted || addressInfo.address}`;
+      
+      if (addressInfo.neighborhood) {
+        draftSummary += `\n📍 *Area:* ${addressInfo.neighborhood}`;
+      }
+      
+      draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
+
+      await this.sendAndLog(customerId, conversationId, whatsappNumber, draftSummary);
+      return true;
+    }
+
+    return false;
+  }
+
+  // ===== Handle quantity responses =====
   private async handleQuantityResponse(
     customerId: string,
     conversationId: string,
@@ -622,11 +735,9 @@ export class WebhooksController {
     bodyText: string,
     pendingItems: string[],
   ): Promise<boolean> {
-    // Parse the quantity from the customer's message
     const quantity = this.conversations.parseQuantity(bodyText);
     
     if (!quantity) {
-      // Invalid quantity format - ask again
       await this.sendAndLog(
         customerId,
         conversationId,
@@ -636,7 +747,6 @@ export class WebhooksController {
       return true;
     }
 
-    // Store the item with its quantity
     const currentItem = pendingItems[0];
     await this.conversations.mergeDraft(
       conversationId,
@@ -644,12 +754,10 @@ export class WebhooksController {
       null
     );
 
-    // Remove the completed item from pending
     pendingItems.shift();
     await this.conversations.setPendingItems(conversationId, pendingItems);
 
     if (pendingItems.length > 0) {
-      // Ask for the next item
       await this.sendAndLog(
         customerId,
         conversationId,
@@ -657,13 +765,23 @@ export class WebhooksController {
         `Great! ✅ ${quantity.value} ${quantity.unit} of ${currentItem} added.\n\nHow much *${pendingItems[0]}* do you want? (e.g., "2 cups", "1 kg", "N500 worth")`
       );
     } else {
-      // All items have quantities - show the full list
       const draft = await this.conversations.getDraft(conversationId);
+      const addressInfo = await this.conversations.getDeliveryAddress(conversationId);
+      
       let summary = `Noted! Here's your list so far:\n\n`;
       draft.items.forEach((item) => {
         summary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
       });
-      summary += `\n📍 Still need your delivery address — just drop it whenever you're ready.`;
+      
+      if (addressInfo.address) {
+        summary += `\n📍 *Delivery to:* ${addressInfo.formatted || addressInfo.address}`;
+        if (addressInfo.neighborhood) {
+          summary += `\n📍 *Area:* ${addressInfo.neighborhood}`;
+        }
+      } else {
+        summary += `\n📍 Still need your delivery address — just drop it whenever you're ready.`;
+      }
+      
       summary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
       
       await this.sendAndLog(customerId, conversationId, whatsappNumber, summary);
@@ -703,7 +821,6 @@ export class WebhooksController {
       return aiResult;
     }
 
-    // Model returned junk / sorry / null — still try money-shorthand parse
     if (fromMessage.length > 0) {
       this.logger.warn(
         `AI miss on "${bodyText.slice(0, 80)}" — recovered ${fromMessage.length} budget item(s) from message`,
@@ -720,7 +837,6 @@ export class WebhooksController {
 
   /**
    * Price draft lines from catalog OR customer budget wording
-   * (e.g. unit "N2000 worth" / "fish 2 thousand").
    */
   private async priceDraftItems(
     items: { name: string; quantity: number; unit: string }[],
@@ -744,7 +860,6 @@ export class WebhooksController {
       const quantity = Number(item.quantity) || 0;
       const budget = parseBudgetNaira(item.unit, item.name);
 
-      // Budget orders ("₦2k worth of fish") — the stated money IS the line total
       if (budget != null) {
         return {
           name: item.name,
@@ -808,7 +923,6 @@ export class WebhooksController {
     let paymentUrl = order.paymentUrl;
     let displayTotal = totalNaira;
 
-    // Order was placed before pricing — try catalog again, then Paystack
     if (totalNaira < 1 || !paymentUrl) {
       const repriced = await this.repriceOrderItems(order.id, order.items);
       displayTotal = repriced.total;
@@ -883,7 +997,7 @@ export class WebhooksController {
     return true;
   }
 
-  /** Re-price order line items from catalog (e.g. after admin adds Titus). */
+  /** Re-price order line items from catalog */
   private async repriceOrderItems(
     orderId: string,
     items: Array<{
@@ -930,10 +1044,7 @@ export class WebhooksController {
   }
 
   /**
-   * Sends an outbound WhatsApp message and logs it, isolated in its own
-   * try/catch. Previously a failed send here (after an order was already
-   * committed in the DB) would throw uncaught — the order would exist but
-   * the customer would never be told, with no automatic recovery.
+   * Sends an outbound WhatsApp message and logs it
    */
   private async sendAndLog(
     customerId: string,
@@ -956,9 +1067,6 @@ export class WebhooksController {
       await this.conversations.touch(conversationId);
     } catch (error) {
       this.logger.error(`Failed to send/log outbound message to ${whatsappNumber}`, error as Error);
-      // TODO: wire this into an alert/retry queue. DB state (e.g. an
-      // already-created order) is still correct even if the customer wasn't
-      // notified — this just needs a delivery retry, not a data fix.
     }
   }
 
@@ -996,7 +1104,6 @@ export class WebhooksController {
   }
 
   private resolveReplyKey(body: string | null, isNewCustomer: boolean): string {
-    // New customer who already dropped a shopping list → skip static welcome
     if (isNewCustomer) {
       if (body && looksLikeOrderIntent(body)) return "default";
       return "welcome";

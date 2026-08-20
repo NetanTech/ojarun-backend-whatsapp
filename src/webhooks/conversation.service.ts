@@ -115,11 +115,8 @@ export class ConversationService {
     });
   }
 
-  // ===== NEW METHODS FOR PENDING ITEMS =====
+  // ===== PENDING ITEMS METHODS =====
 
-  /**
-   * Store items that need quantities (pending items)
-   */
   async setPendingItems(sessionId: string, items: string[]): Promise<void> {
     await this.prisma.chatSession.update({
       where: { id: sessionId },
@@ -129,17 +126,11 @@ export class ConversationService {
     });
   }
 
-  /**
-   * Get items that still need quantities
-   */
   async getPendingItems(sessionId: string): Promise<string[]> {
     const session = await this.prisma.chatSession.findUniqueOrThrow({ where: { id: sessionId } });
-    return (session.pendingItems as unknown as string[] | null) ?? [];
+    return (session as any).pendingItems as string[] ?? [];
   }
 
-  /**
-   * Clear pending items after all quantities are collected
-   */
   async clearPendingItems(sessionId: string): Promise<void> {
     await this.prisma.chatSession.update({
       where: { id: sessionId },
@@ -147,9 +138,61 @@ export class ConversationService {
     });
   }
 
+  // ===== ADDRESS METHODS =====
+
+  /**
+   * Store the validated delivery address
+   */
+  async setDeliveryAddress(
+    sessionId: string,
+    address: string,
+    validatedAddress?: {
+      formatted: string;
+      neighborhood?: string;
+      landmark?: string;
+    }
+  ): Promise<void> {
+    const data: any = {
+      draftDeliveryAddress: address,
+    };
+    
+    // Store additional address info if available
+    if (validatedAddress) {
+      data.draftDeliveryAddressMeta = {
+        formatted: validatedAddress.formatted,
+        neighborhood: validatedAddress.neighborhood,
+        landmark: validatedAddress.landmark,
+      } as unknown as Prisma.InputJsonValue;
+    }
+    
+    await this.prisma.chatSession.update({
+      where: { id: sessionId },
+      data,
+    });
+  }
+
+  /**
+   * Get the delivery address with metadata
+   */
+  async getDeliveryAddress(sessionId: string): Promise<{
+    address: string | null;
+    formatted?: string;
+    neighborhood?: string;
+    landmark?: string;
+  }> {
+    const session = await this.prisma.chatSession.findUniqueOrThrow({ where: { id: sessionId } });
+    const meta = (session as any).draftDeliveryAddressMeta as any || {};
+    
+    return {
+      address: session.draftDeliveryAddress,
+      formatted: meta.formatted,
+      neighborhood: meta.neighborhood,
+      landmark: meta.landmark,
+    };
+  }
+
   /**
    * Parse quantity from customer message
-   * Returns { value: number, unit: string } or null if not a valid quantity
    */
   parseQuantity(message: string): { value: number; unit: string } | null {
     const text = message.trim().toLowerCase();
@@ -187,7 +230,7 @@ export class ConversationService {
     return null;
   }
 
-  // ===== END NEW METHODS =====
+  // ===== END =====
 
   /**
    * Closes a session immediately rather than waiting for the idle timeout.
