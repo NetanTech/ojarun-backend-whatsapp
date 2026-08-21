@@ -27,7 +27,7 @@ export class AiService {
     const baseUrl = this.config.get<string>('ai.baseUrl');
     
     this.logger.log(`🔍 AI Config: provider=${provider}, model=${model}, baseUrl=${baseUrl || 'default'}`);
-    this.logger.log(`🔑 API Key present: ${apiKey ? 'YES' : 'NO'}`);
+    this.logger.log(`🔑 API Key present: ${apiKey ? 'YES (starts with ' + apiKey.substring(0, 10) + '...)' : 'NO'}`);
   }
 
   async chat(
@@ -56,30 +56,54 @@ export class AiService {
     try {
       let result: AiChatResult | null = null;
       
-      // For OpenRouter, use the OpenAI-compatible endpoint
-      if (provider === 'openai' || provider === 'openrouter') {
-        const baseUrl = this.config.get<string>('ai.baseUrl') || 'https://api.openai.com/v1';
-        result = await this.callOpenAICompatible(
-          `${baseUrl}/chat/completions`,
-          userMessage,
-          history,
-          customerContext,
-        );
-      } else {
-        switch (provider) {
-          case 'anthropic':
-            result = await this.callAnthropic(userMessage, history, customerContext);
-            break;
-          case 'groq':
-            result = await this.callGroq(userMessage, history, customerContext);
-            break;
-          case 'gemini':
-            result = await this.callGemini(userMessage, history, customerContext);
-            break;
-          default:
-            this.logger.error(`Unknown AI provider: ${provider}`);
-            return null;
+      switch (provider) {
+        case 'anthropic':
+          result = await this.callAnthropic(userMessage, history, customerContext);
+          break;
+        case 'groq':
+          result = await this.callGroq(userMessage, history, customerContext);
+          break;
+        case 'openai':
+        case 'openrouter': {
+          // 👇 FORCE OpenRouter URL
+          const apiKey = this.config.get<string>('ai.apiKey') || '';
+          let configuredBaseUrl = this.config.get<string>('ai.baseUrl');
+          
+          // Log what we have
+          this.logger.log(`🔍 API key starts with: ${apiKey.substring(0, 10)}...`);
+          this.logger.log(`🔍 Configured baseUrl: ${configuredBaseUrl || 'NOT SET'}`);
+          
+          // 👇 FORCE: If API key starts with sk-or-v1, use OpenRouter
+          if (apiKey.startsWith('sk-or-v1')) {
+            configuredBaseUrl = 'https://openrouter.ai/api/v1';
+            this.logger.log('🔍 Forcing OpenRouter base URL (API key detected)');
+          }
+          
+          // 👇 FORCE: If no baseUrl configured but we have an API key
+          if (!configuredBaseUrl && apiKey) {
+            configuredBaseUrl = 'https://openrouter.ai/api/v1';
+            this.logger.log('🔍 Forcing OpenRouter base URL (no baseUrl configured)');
+          }
+          
+          // Fallback
+          const baseUrl = configuredBaseUrl || 'https://api.openai.com/v1';
+          
+          this.logger.log(`✅ Using base URL: ${baseUrl}`);
+          
+          result = await this.callOpenAICompatible(
+            `${baseUrl}/chat/completions`,
+            userMessage,
+            history,
+            customerContext,
+          );
+          break;
         }
+        case 'gemini':
+          result = await this.callGemini(userMessage, history, customerContext);
+          break;
+        default:
+          this.logger.error(`Unknown AI provider: ${provider}`);
+          return null;
       }
 
       if (!result) return null;
@@ -154,9 +178,21 @@ export class AiService {
         case 'groq':
         case 'openai':
         case 'openrouter': {
-          const baseUrl = this.config.get<string>('ai.baseUrl') || 
-            (provider === 'groq' ? 'https://api.groq.com/openai/v1' : 'https://api.openai.com/v1');
+          // 👇 FORCE OpenRouter
+          const apiKey = this.config.get<string>('ai.apiKey') || '';
+          let baseUrl = this.config.get<string>('ai.baseUrl');
+          
+          if (apiKey.startsWith('sk-or-v1')) {
+            baseUrl = 'https://openrouter.ai/api/v1';
+          }
+          
+          if (!baseUrl && apiKey) {
+            baseUrl = 'https://openrouter.ai/api/v1';
+          }
+          
+          baseUrl = baseUrl || (provider === 'groq' ? 'https://api.groq.com/openai/v1' : 'https://api.openai.com/v1');
           const url = `${baseUrl}/chat/completions`;
+          
           const res = await this.fetchWithTimeout(url, {
             method: 'POST',
             headers: {
@@ -175,7 +211,7 @@ export class AiService {
         }
         case 'gemini': {
           const apiKey = this.config.get<string>('ai.apiKey');
-          const model = this.config.get<string>('ai.model');
+          const model = this.config.get<string>('ai.model') || 'gemini-1.0-pro';
           const res = await this.fetchWithTimeout(
             `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
             {
@@ -465,195 +501,193 @@ export class AiService {
   }
 
   // ============== OPENAI COMPATIBLE (Works with OpenRouter, OpenAI, Groq) ==============
- private async callOpenAICompatible(
-  url: string,
-  userMessage: string,
-  history: ChatMessage[],
-  customerContext: string | null,
-): Promise<AiChatResult | null> {
-  const apiKey = this.config.get<string>('ai.apiKey');
-  const model = this.config.get<string>('ai.model') || 'meta-llama/llama-3.2-3b-instruct:free';
+  private async callOpenAICompatible(
+    url: string,
+    userMessage: string,
+    history: ChatMessage[],
+    customerContext: string | null,
+  ): Promise<AiChatResult | null> {
+    const apiKey = this.config.get<string>('ai.apiKey');
+    const model = this.config.get<string>('ai.model') || 'meta-llama/llama-3.2-3b-instruct:free';
 
-  if (!apiKey) {
-    this.logger.error('❌ API key is missing');
-    return null;
-  }
-
-  this.logger.log(`📡 Calling OpenAI-compatible API: ${url}`);
-  this.logger.log(`📡 Model: ${model}`);
-
-  try {
-    const res = await this.fetchWithTimeout(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: model,
-        max_tokens: 1000,
-        temperature: 0.7,
-        messages: [
-          { role: 'system', content: this.systemPrompt(customerContext) },
-          ...history,
-          { role: 'user', content: userMessage },
-        ],
-        tools: this.getMarketTools(),
-        tool_choice: 'auto',
-      }),
-    });
-
-    if (!res.ok) {
-      const rawBody = await res.text();
-      this.logger.error(`❌ API error ${res.status}: ${rawBody}`);
-      
-      try {
-        const errorJson = JSON.parse(rawBody);
-        this.logger.error(`❌ Error details: ${JSON.stringify(errorJson)}`);
-      } catch {
-        // not JSON
-      }
-      
-      throw new Error(`Provider error: ${res.statusText} (${rawBody})`);
-    }
-
-    const data = await res.json();
-    const message = data.choices?.[0]?.message;
-    
-    if (!message) {
-      this.logger.warn('No message in response');
+    if (!apiKey) {
+      this.logger.error('❌ API key is missing');
       return null;
     }
 
-    if (message.tool_calls && message.tool_calls.length > 0) {
-      const toolCall = message.tool_calls[0];
-      if (toolCall.function.name === 'update_order_items') {
+    this.logger.log(`📡 Calling OpenAI-compatible API: ${url}`);
+    this.logger.log(`📡 Model: ${model}`);
+
+    try {
+      const res = await this.fetchWithTimeout(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: model,
+          max_tokens: 1000,
+          temperature: 0.7,
+          messages: [
+            { role: 'system', content: this.systemPrompt(customerContext) },
+            ...history,
+            { role: 'user', content: userMessage },
+          ],
+          tools: this.getMarketTools(),
+          tool_choice: 'auto',
+        }),
+      });
+
+      if (!res.ok) {
+        const rawBody = await res.text();
+        this.logger.error(`❌ API error ${res.status}: ${rawBody}`);
+        
         try {
-          const args = JSON.parse(toolCall.function.arguments);
-          return this.toDraftUpdateResult(args);
-        } catch (e) {
-          this.logger.error('Failed to parse tool call arguments:', e);
+          const errorJson = JSON.parse(rawBody);
+          this.logger.error(`❌ Error details: ${JSON.stringify(errorJson)}`);
+        } catch {
+          // not JSON
+        }
+        
+        throw new Error(`Provider error: ${res.statusText} (${rawBody})`);
+      }
+
+      const data = await res.json();
+      const message = data.choices?.[0]?.message;
+      
+      if (!message) {
+        this.logger.warn('No message in response');
+        return null;
+      }
+
+      if (message.tool_calls && message.tool_calls.length > 0) {
+        const toolCall = message.tool_calls[0];
+        if (toolCall.function.name === 'update_order_items') {
+          try {
+            const args = JSON.parse(toolCall.function.arguments);
+            return this.toDraftUpdateResult(args);
+          } catch (e) {
+            this.logger.error('Failed to parse tool call arguments:', e);
+          }
+        }
+        if (toolCall.function.name === 'confirm_order') {
+          return { type: 'confirm_order' };
         }
       }
-      if (toolCall.function.name === 'confirm_order') {
-        return { type: 'confirm_order' };
+
+      if (message.content) {
+        return { type: 'text', content: message.content };
       }
-    }
 
-    if (message.content) {
-      return { type: 'text', content: message.content };
+      return null;
+    } catch (error) {
+      this.logger.error('❌ OpenAI-compatible API call failed:', error);
+      throw error;
     }
-
-    return null;
-  } catch (error) {
-    this.logger.error('❌ OpenAI-compatible API call failed:', error);
-    throw error;
   }
-}
-
 
   // ============== GEMINI ==============
-private async callGemini(
-  userMessage: string,
-  history: ChatMessage[],
-  customerContext: string | null,
-): Promise<AiChatResult | null> {
-  const apiKey = this.config.get<string>('ai.apiKey');
-  const model = this.config.get<string>('ai.model') || 'gemini-1.0-pro'; // 👈 FIX: Provide default
+  private async callGemini(
+    userMessage: string,
+    history: ChatMessage[],
+    customerContext: string | null,
+  ): Promise<AiChatResult | null> {
+    const apiKey = this.config.get<string>('ai.apiKey');
+    const model = this.config.get<string>('ai.model') || 'gemini-1.0-pro';
 
-  if (!apiKey) {
-    this.logger.error('❌ Gemini API key is missing');
-    return null;
-  }
-
-  // Map model names to correct format
-  const modelMap: Record<string, string> = {
-    'gemini-pro': 'gemini-1.0-pro',
-    'gemini-1.0-pro': 'gemini-1.0-pro',
-    'gemini-1.5-pro': 'gemini-1.5-pro',
-    'gemini-1.5-flash': 'gemini-1.5-flash',
-    'gemini-1.5-pro-latest': 'gemini-1.5-pro',
-    'gemini-1.5-flash-latest': 'gemini-1.5-flash',
-  };
-
-  // 👇 FIX: Ensure model is a string before using as index
-  const actualModel = modelMap[model] || model;
-  this.logger.log(`📡 Calling Gemini with model: ${actualModel}`);
-
-  const rawContents = [
-    ...history.map((m) => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content || ' ' }],
-    })),
-    { role: 'user', parts: [{ text: userMessage }] },
-  ];
-
-  const contents: any[] = [];
-  for (const msg of rawContents) {
-    if (contents.length === 0 || contents[contents.length - 1].role !== msg.role) {
-      contents.push(msg);
-    } else {
-      contents[contents.length - 1].parts[0].text += `\n${msg.parts[0].text}`;
-    }
-  }
-
-  const requestBody: any = {
-    contents: contents,
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 1000,
-    },
-  };
-
-  const systemInstruction = this.systemPrompt(customerContext);
-  if (systemInstruction) {
-    requestBody.system_instruction = {
-      parts: [{ text: systemInstruction }],
-    };
-  }
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${actualModel}:generateContent?key=${apiKey}`;
-
-  try {
-    const res = await this.fetchWithTimeout(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!res.ok) {
-      const errorText = await res.text();
-      this.logger.error(`❌ Gemini API error ${res.status}: ${errorText}`);
-      throw new Error(`Gemini error: ${res.statusText} (${errorText})`);
-    }
-
-    const data = await res.json();
-    const parts = data.candidates?.[0]?.content?.parts;
-    
-    if (!parts || parts.length === 0) {
-      this.logger.warn('No parts in Gemini response');
+    if (!apiKey) {
+      this.logger.error('❌ Gemini API key is missing');
       return null;
     }
 
-    const functionCallPart = parts.find((p: any) => p.functionCall);
-    if (functionCallPart?.functionCall?.name === 'update_order_items') {
-      return this.toDraftUpdateResult(functionCallPart.functionCall.args);
-    }
-    if (functionCallPart?.functionCall?.name === 'confirm_order') {
-      return { type: 'confirm_order' };
+    // Map model names to correct format
+    const modelMap: Record<string, string> = {
+      'gemini-pro': 'gemini-1.0-pro',
+      'gemini-1.0-pro': 'gemini-1.0-pro',
+      'gemini-1.5-pro': 'gemini-1.5-pro',
+      'gemini-1.5-flash': 'gemini-1.5-flash',
+      'gemini-1.5-pro-latest': 'gemini-1.5-pro',
+      'gemini-1.5-flash-latest': 'gemini-1.5-flash',
+    };
+
+    const actualModel = modelMap[model] || model;
+    this.logger.log(`📡 Calling Gemini with model: ${actualModel}`);
+
+    const rawContents = [
+      ...history.map((m) => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content || ' ' }],
+      })),
+      { role: 'user', parts: [{ text: userMessage }] },
+    ];
+
+    const contents: any[] = [];
+    for (const msg of rawContents) {
+      if (contents.length === 0 || contents[contents.length - 1].role !== msg.role) {
+        contents.push(msg);
+      } else {
+        contents[contents.length - 1].parts[0].text += `\n${msg.parts[0].text}`;
+      }
     }
 
-    const text = parts.map((p: any) => p.text).join(' ');
-    if (text) {
-      return { type: 'text', content: text };
+    const requestBody: any = {
+      contents: contents,
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 1000,
+      },
+    };
+
+    const systemInstruction = this.systemPrompt(customerContext);
+    if (systemInstruction) {
+      requestBody.system_instruction = {
+        parts: [{ text: systemInstruction }],
+      };
     }
 
-    return null;
-  } catch (error) {
-    this.logger.error('❌ Gemini API call failed:', error);
-    throw error;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${actualModel}:generateContent?key=${apiKey}`;
+
+    try {
+      const res = await this.fetchWithTimeout(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        this.logger.error(`❌ Gemini API error ${res.status}: ${errorText}`);
+        throw new Error(`Gemini error: ${res.statusText} (${errorText})`);
+      }
+
+      const data = await res.json();
+      const parts = data.candidates?.[0]?.content?.parts;
+      
+      if (!parts || parts.length === 0) {
+        this.logger.warn('No parts in Gemini response');
+        return null;
+      }
+
+      const functionCallPart = parts.find((p: any) => p.functionCall);
+      if (functionCallPart?.functionCall?.name === 'update_order_items') {
+        return this.toDraftUpdateResult(functionCallPart.functionCall.args);
+      }
+      if (functionCallPart?.functionCall?.name === 'confirm_order') {
+        return { type: 'confirm_order' };
+      }
+
+      const text = parts.map((p: any) => p.text).join(' ');
+      if (text) {
+        return { type: 'text', content: text };
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.error('❌ Gemini API call failed:', error);
+      throw error;
+    }
   }
-}
 }
