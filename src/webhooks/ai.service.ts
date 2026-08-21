@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import Groq from 'groq-sdk';
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
@@ -19,8 +20,21 @@ const FETCH_TIMEOUT_MS = 20_000;
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
+  private groqClient: Groq | null = null;
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(private readonly config: ConfigService) {
+    const apiKey = this.config.get<string>('ai.apiKey');
+    if (apiKey) {
+      try {
+        this.groqClient = new Groq({ apiKey });
+        this.logger.log('✅ Groq client initialized successfully');
+      } catch (error) {
+        this.logger.error('❌ Failed to initialize Groq client:', error);
+      }
+    } else {
+      this.logger.warn('⚠️ Groq API key not configured');
+    }
+  }
 
   async chat(
     userMessage: string,
@@ -30,6 +44,9 @@ export class AiService {
     const provider = this.config.get<string>('ai.provider');
     const text = userMessage.trim().toUpperCase();
 
+    // Log the config for debugging
+    this.logger.log(`🔍 AI Config: provider=${provider}, model=${this.config.get<string>('ai.model')}`);
+
     const dynamicGreetings = [
       `Aba! 👋 Welcome to OjaRun! I dey here sharp-sharp to run your market errands for Ibadan. Drop your shopping list or tell me wetin you wan buy today! 🛍️`,
       `How far! 👋 OjaRun dey here for you. Tell me wetin you wan buy from market today make we go help you buy am sharp-sharp! 🍅`,
@@ -37,8 +54,6 @@ export class AiService {
       `Aba, how body? 👋 OjaRun service active! Drop your market list here make we run the errand for you sharp-sharp! 🛒`,
     ];
 
-    // Only intercept greetings if there's no active conversation history — if
-    // they're already mid-conversation, let the LLM handle it with context.
     const greetingWords = ['HEYY', 'HEY', 'HELLO', 'HI', 'HOW FAR', 'YO', 'AFA', 'AOFA', 'YO YO YO'];
     if (history.length === 0 && (greetingWords.includes(text) || greetingWords.some((g) => text.startsWith(g + ' ')))) {
       const randomIndex = Math.floor(Math.random() * dynamicGreetings.length);
@@ -52,12 +67,7 @@ export class AiService {
           result = await this.callAnthropic(userMessage, history, customerContext);
           break;
         case 'groq':
-          result = await this.callOpenAICompatible(
-            'https://api.groq.com/openai/v1/chat/completions',
-            userMessage,
-            history,
-            customerContext,
-          );
+          result = await this.callGroq(userMessage, history, customerContext);
           break;
         case 'openai':
           result = await this.callOpenAICompatible(
@@ -78,19 +88,12 @@ export class AiService {
       if (!result) return null;
       if (result.type !== 'text') return result;
 
-      // Some models (observed with Groq/Llama) occasionally hallucinate a
-      // pseudo-XML representation of the tool call as plain text instead of
-      // actually invoking it, e.g. `<function/update_order_items {...} />`.
-      // Left unhandled, that garbled text goes straight to the customer AND
-      // gets saved into history, confusing every subsequent turn. Recover
-      // it here instead of trusting every model to always call tools cleanly.
       const recovered = this.tryRecoverToolCallFromText(result.content);
       if (recovered) {
         this.logger.warn(`Recovered a tool call the model emitted as text: ${result.content.slice(0, 200)}`);
         return recovered;
       }
 
-      // Still looks like tool syntax after recovery failed — never show to customer
       if (/<function[=/(]|update_order_items\s*\)?\s*\(?\s*\{|confirm_order\s*\(/i.test(result.content)) {
         this.logger.warn(
           `Dropping unrecoverable tool-syntax text: ${result.content.slice(0, 200)}`,
@@ -118,11 +121,7 @@ export class AiService {
   }
 
   /**
-   * Used by ConversationService when a conversation goes idle. Folds the
-   * transcript into the customer's existing rolling profile and returns an
-   * updated short summary — durable facts only (delivery area, usual items,
-   * preferences), not a growing transcript log. Non-fatal on failure: the
-   * caller should just skip updating the profile this round.
+   * Summarize conversation (existing method - keep as is)
    */
   async summarizeConversation(transcript: string, existingContext: string | null): Promise<string | null> {
     const provider = this.config.get<string>('ai.provider');
@@ -201,12 +200,13 @@ export class AiService {
     }
   }
 
+  // ============== SYSTEM PROMPT ==============
   private systemPrompt(customerContext: string | null): string {
     const base = this.config.get<string>('ai.systemPrompt') ?? 'You are a helpful assistant.';
 
     const orderingProtocol =
       `\n\nOrdering protocol — follow this exactly:\n` +
-      `- When the customer mentions items they want (e.g., "I want to buy beans, Garri, Pepper"), DO NOT automatically assign quantities or prices. Instead, ask for quantities one at a time.\n` +
+      `- When the customer mentions items they want, DO NOT automatically assign quantities or prices. Instead, ask for quantities one at a time.\n` +
       `- If the customer lists multiple items without quantities, respond with a friendly question asking for the quantity of the FIRST item only. Example: "How much beans do you want? (e.g., '2 cups', '1 kg', 'N500 worth')"\n` +
       `- After the customer gives the quantity for one item, store it and ask for the next item's quantity. Continue this pattern until all items have quantities.\n` +
       `- Only call update_order_items when the customer has provided BOTH the item name AND its quantity/amount.\n` +
@@ -220,6 +220,73 @@ export class AiService {
     return `${withProtocol}\n\nWhat you remember about this returning customer from past conversations:\n${customerContext}\n\nUse this only where it's actually relevant — don't force it into every reply.`;
   }
 
+  // ============== GROQ IMPLEMENTATION ==============
+  private async callGroq(
+    userMessage: string,
+    history: ChatMessage[],
+    customerContext: string | null,
+  ): Promise<AiChatResult | null> {
+    const model = this.config.get<string>('ai.model') || 'mixtral-8x7b-32768';
+    const apiKey = this.config.get<string>('ai.apiKey');
+
+    if (!apiKey) {
+      this.logger.error('❌ Groq API key is missing');
+      return null;
+    }
+
+    if (!this.groqClient) {
+      this.logger.error('❌ Groq client is not initialized');
+      return null;
+    }
+
+    try {
+      this.logger.log(`📡 Calling Groq with model: ${model}`);
+
+      const response = await this.groqClient.chat.completions.create({
+        messages: [
+          { role: 'system', content: this.systemPrompt(customerContext) },
+          ...history,
+          { role: 'user', content: userMessage },
+        ],
+        model: model,
+        max_tokens: 1000,
+        temperature: 0.7,
+        // Use tools if available in the client version
+        ...(this.groqClient && {
+          tools: this.getMarketTools(),
+          tool_choice: 'auto',
+        }),
+      });
+
+      const message = response.choices[0]?.message;
+      if (!message) return null;
+
+      // Check for tool calls
+      if (message.tool_calls && message.tool_calls.length > 0) {
+        const toolCall = message.tool_calls[0];
+        if (toolCall.function.name === 'update_order_items') {
+          const args = JSON.parse(toolCall.function.arguments);
+          return this.toDraftUpdateResult(args);
+        }
+        if (toolCall.function.name === 'confirm_order') {
+          return { type: 'confirm_order' };
+        }
+      }
+
+      // If no tool call, return as text
+      if (message.content) {
+        return { type: 'text', content: message.content };
+      }
+
+      return null;
+    } catch (error: any) {
+      this.logger.error(`❌ Groq API error: ${error.message}`);
+      this.logger.error(`❌ Error details: ${JSON.stringify(error, null, 2)}`);
+      return null;
+    }
+  }
+
+  // ============== TOOLS ==============
   private getMarketTools() {
     return [
       {
@@ -237,16 +304,14 @@ export class AiService {
                 items: {
                   type: 'object',
                   properties: {
-                    name: { type: 'string', description: 'Specific product name, e.g., Local Rice, Ofada Rice, Scotch Bonnet Pepper, Beef' },
+                    name: { type: 'string', description: 'Specific product name' },
                     quantity: {
                       type: 'number',
-                      description:
-                        'Physical amount only (kg, bags, pieces). Convert fractions to decimals (e.g. "1/2 bag" -> 0.5). If the customer gave a MONEY amount like "2k", "5k", "N2000", "2 thousand", set quantity to 1 — never treat "2k" as 2kg.',
+                      description: 'Physical amount only (kg, bags, pieces). For money, set to 1.',
                     },
                     unit: {
                       type: 'string',
-                      description:
-                        'Physical unit (kg, bag, congo, piece, tuber) OR money phrase. In Nigeria "2k"/"5k" ALWAYS means naira (₦2000/₦5000), NOT kilograms — use unit "N2000 worth" / "N5000 worth". Only use kg if they explicitly said "kg" or "kilo".',
+                      description: 'Physical unit OR money phrase like "N2000 worth"',
                     },
                   },
                   required: ['name', 'quantity', 'unit'],
@@ -265,8 +330,7 @@ export class AiService {
         type: 'function',
         function: {
           name: 'confirm_order',
-          description:
-            'Call this ONLY when the customer has explicitly confirmed they are done adding items and ready to place the order. Takes no arguments — the system already has the full list.',
+          description: 'Call this ONLY when the customer has explicitly confirmed they are done.',
           parameters: { type: 'object', properties: {} },
         },
       },
@@ -277,33 +341,25 @@ export class AiService {
     return [
       {
         name: 'update_order_items',
-        description:
-          'Call this whenever the customer mentions an item with a quantity/amount. Only include what changed this turn; the system merges it into the running list for you.',
+        description: 'Call this whenever the customer mentions an item with a quantity/amount.',
         input_schema: {
           type: 'object',
           properties: {
             items: {
               type: 'array',
-              description: 'Items with quantities mentioned this turn — not the full running list.',
               items: {
                 type: 'object',
                 properties: {
-                  name: { type: 'string', description: 'Specific product name, e.g., Local Rice, Ofada Rice' },
-                  quantity: {
-                    type: 'number',
-                    description: 'Numeric amount. Convert fractions to decimals (e.g. "1/2 bag" -> 0.5). Use 1 if only a money amount was given.',
-                  },
-                  unit: {
-                    type: 'string',
-                    description: 'Unit exactly as implied by customer: kg, bag, congo, piece. For money amounts, use the exact phrase, e.g. "N5000 worth".',
-                  },
+                  name: { type: 'string' },
+                  quantity: { type: 'number' },
+                  unit: { type: 'string' },
                 },
                 required: ['name', 'quantity', 'unit'],
               },
             },
             deliveryAddress: {
               type: 'string',
-              description: 'The customer\'s delivery address, only if newly mentioned this turn. Omit otherwise.',
+              description: 'The customer\'s delivery address, only if newly mentioned.',
             },
           },
           required: ['items'],
@@ -311,8 +367,7 @@ export class AiService {
       },
       {
         name: 'confirm_order',
-        description:
-          'Call this ONLY when the customer has explicitly confirmed they are done adding items and ready to place the order. Takes no arguments — the system already has the full list.',
+        description: 'Call this ONLY when the customer has explicitly confirmed they are done.',
         input_schema: { type: 'object', properties: {} },
       },
     ];
@@ -324,27 +379,25 @@ export class AiService {
         function_declarations: [
           {
             name: 'update_order_items',
-            description:
-              'Call this whenever the customer mentions an item with a quantity/amount. Only include what changed this turn; the system merges it into the running list for you.',
+            description: 'Call this whenever the customer mentions an item with a quantity/amount.',
             parameters: {
               type: 'OBJECT',
               properties: {
                 items: {
                   type: 'ARRAY',
-                  description: 'Items with quantities mentioned this turn — not the full running list.',
                   items: {
                     type: 'OBJECT',
                     properties: {
-                      name: { type: 'STRING', description: 'Specific product name' },
-                      quantity: { type: 'NUMBER', description: 'Numeric amount, fractions converted to decimals. Use 1 if only a money amount was given.' },
-                      unit: { type: 'STRING', description: 'Unit as implied by customer, or the money phrase if that was all that was given.' },
+                      name: { type: 'STRING' },
+                      quantity: { type: 'NUMBER' },
+                      unit: { type: 'STRING' },
                     },
                     required: ['name', 'quantity', 'unit'],
                   },
                 },
                 deliveryAddress: {
                   type: 'STRING',
-                  description: 'The customer\'s delivery address, only if newly mentioned this turn. Omit otherwise.',
+                  description: 'The customer\'s delivery address, only if newly mentioned.',
                 },
               },
               required: ['items'],
@@ -352,8 +405,7 @@ export class AiService {
           },
           {
             name: 'confirm_order',
-            description:
-              'Call this ONLY when the customer has explicitly confirmed they are done adding items and ready to place the order. Takes no arguments — the system already has the full list.',
+            description: 'Call this ONLY when the customer has explicitly confirmed they are done.',
             parameters: { type: 'OBJECT', properties: {} },
           },
         ],
@@ -361,6 +413,7 @@ export class AiService {
     ];
   }
 
+  // ============== HELPERS ==============
   private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -371,17 +424,7 @@ export class AiService {
     }
   }
 
-  /**
-   * Attempts to recover a tool call from text the model emitted instead of
-   * a real structured tool call — e.g. `<function/update_order_items {...} />`.
-   * Returns null if the text doesn't look like a hallucinated tool call at
-   * all, in which case it's genuinely just a normal reply.
-   */
   private tryRecoverToolCallFromText(content: string): AiChatResult | null {
-    // Formats seen from Groq/Llama:
-    //   <function=update_order_items({...})>
-    //   <function(update_order_items){...}</function>
-    //   <function/update_order_items {...} />
     const confirmMatch = /confirm_order/i.test(content);
     const updateMatch = content.match(
       /update_order_items\s*\)?\s*\(?\s*(\{[\s\S]*\})/i,
@@ -403,7 +446,6 @@ export class AiService {
     return null;
   }
 
-  /** Strict JSON first; then single-quote / trailing-comma cleanup for Groq junk. */
   private parseLooseJson(text: string): any | null {
     try {
       return JSON.parse(text);
@@ -430,7 +472,6 @@ export class AiService {
           const quantity = Number.isFinite(rawQty) ? rawQty : 1;
           return {
             name: String(item?.name ?? '').trim(),
-            // 0 means "remove this item" — keep it so mergeDraft can drop it
             quantity,
             unit: item?.unit?.toString().trim() || 'pieces',
           };
@@ -440,6 +481,7 @@ export class AiService {
     };
   }
 
+  // ============== OTHER PROVIDERS (Anthropic, OpenAI, Gemini) ==============
   private async callAnthropic(
     userMessage: string,
     history: ChatMessage[],
@@ -476,7 +518,6 @@ export class AiService {
     return textBlock?.text ? { type: 'text', content: textBlock.text } : null;
   }
 
-  /** Groq and OpenAI both speak the OpenAI chat-completions format — one implementation, base URL swapped in. */
   private async callOpenAICompatible(
     url: string,
     userMessage: string,
@@ -504,25 +545,17 @@ export class AiService {
 
     if (!res.ok) {
       const rawBody = await res.text();
-      // Groq specifically can reject a tool call outright (tool_use_failed)
-      // rather than returning a garbled successful reply — but it conveniently
-      // includes what it tried to generate in error.failed_generation, in the
-      // same malformed shape as the text-hallucination case. Route it through
-      // the same recovery path instead of just failing.
       let parsedError: any = null;
       try {
         parsedError = JSON.parse(rawBody);
       } catch {
-        // not JSON — fall through to the generic throw below
+        // not JSON
       }
       const failedGeneration = parsedError?.error?.failed_generation;
       if (failedGeneration) {
-        this.logger.warn(
-          'Provider rejected a tool call (tool_use_failed) — attempting recovery from failed_generation',
-        );
+        this.logger.warn('Provider rejected a tool call — attempting recovery');
         const recovered = this.tryRecoverToolCallFromText(failedGeneration);
         if (recovered) return recovered;
-        // Never send raw tool syntax to the customer
         if (/update_order_items|confirm_order|<function/i.test(failedGeneration)) {
           return {
             type: 'text',
