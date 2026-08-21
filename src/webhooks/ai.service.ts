@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import Groq from 'groq-sdk';
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
@@ -20,20 +19,15 @@ const FETCH_TIMEOUT_MS = 20_000;
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
-  private groqClient: Groq | null = null;
 
   constructor(private readonly config: ConfigService) {
+    const provider = this.config.get<string>('ai.provider');
+    const model = this.config.get<string>('ai.model');
     const apiKey = this.config.get<string>('ai.apiKey');
-    if (apiKey) {
-      try {
-        this.groqClient = new Groq({ apiKey });
-        this.logger.log('✅ Groq client initialized successfully');
-      } catch (error) {
-        this.logger.error('❌ Failed to initialize Groq client:', error);
-      }
-    } else {
-      this.logger.warn('⚠️ Groq API key not configured');
-    }
+    const baseUrl = this.config.get<string>('ai.baseUrl');
+    
+    this.logger.log(`🔍 AI Config: provider=${provider}, model=${model}, baseUrl=${baseUrl || 'default'}`);
+    this.logger.log(`🔑 API Key present: ${apiKey ? 'YES' : 'NO'}`);
   }
 
   async chat(
@@ -44,7 +38,6 @@ export class AiService {
     const provider = this.config.get<string>('ai.provider');
     const text = userMessage.trim().toUpperCase();
 
-    // Log the config for debugging
     this.logger.log(`🔍 AI Config: provider=${provider}, model=${this.config.get<string>('ai.model')}`);
 
     const dynamicGreetings = [
@@ -62,27 +55,31 @@ export class AiService {
 
     try {
       let result: AiChatResult | null = null;
-      switch (provider) {
-        case 'anthropic':
-          result = await this.callAnthropic(userMessage, history, customerContext);
-          break;
-        case 'groq':
-          result = await this.callGroq(userMessage, history, customerContext);
-          break;
-        case 'openai':
-          result = await this.callOpenAICompatible(
-            'https://api.openai.com/v1/chat/completions',
-            userMessage,
-            history,
-            customerContext,
-          );
-          break;
-        case 'gemini':
-          result = await this.callGemini(userMessage, history, customerContext);
-          break;
-        default:
-          this.logger.error(`Unknown AI provider: ${provider}`);
-          return null;
+      
+      // For OpenRouter, use the OpenAI-compatible endpoint
+      if (provider === 'openai' || provider === 'openrouter') {
+        const baseUrl = this.config.get<string>('ai.baseUrl') || 'https://api.openai.com/v1';
+        result = await this.callOpenAICompatible(
+          `${baseUrl}/chat/completions`,
+          userMessage,
+          history,
+          customerContext,
+        );
+      } else {
+        switch (provider) {
+          case 'anthropic':
+            result = await this.callAnthropic(userMessage, history, customerContext);
+            break;
+          case 'groq':
+            result = await this.callGroq(userMessage, history, customerContext);
+            break;
+          case 'gemini':
+            result = await this.callGemini(userMessage, history, customerContext);
+            break;
+          default:
+            this.logger.error(`Unknown AI provider: ${provider}`);
+            return null;
+        }
       }
 
       if (!result) return null;
@@ -121,7 +118,7 @@ export class AiService {
   }
 
   /**
-   * Summarize conversation (existing method - keep as is)
+   * Summarize conversation
    */
   async summarizeConversation(transcript: string, existingContext: string | null): Promise<string | null> {
     const provider = this.config.get<string>('ai.provider');
@@ -155,11 +152,11 @@ export class AiService {
           return textBlock?.text?.trim() || null;
         }
         case 'groq':
-        case 'openai': {
-          const url =
-            provider === 'groq'
-              ? 'https://api.groq.com/openai/v1/chat/completions'
-              : 'https://api.openai.com/v1/chat/completions';
+        case 'openai':
+        case 'openrouter': {
+          const baseUrl = this.config.get<string>('ai.baseUrl') || 
+            (provider === 'groq' ? 'https://api.groq.com/openai/v1' : 'https://api.openai.com/v1');
+          const url = `${baseUrl}/chat/completions`;
           const res = await this.fetchWithTimeout(url, {
             method: 'POST',
             headers: {
@@ -218,72 +215,6 @@ export class AiService {
     const withProtocol = `${base}${orderingProtocol}`;
     if (!customerContext) return withProtocol;
     return `${withProtocol}\n\nWhat you remember about this returning customer from past conversations:\n${customerContext}\n\nUse this only where it's actually relevant — don't force it into every reply.`;
-  }
-
-  // ============== GROQ IMPLEMENTATION ==============
-  private async callGroq(
-    userMessage: string,
-    history: ChatMessage[],
-    customerContext: string | null,
-  ): Promise<AiChatResult | null> {
-    const model = this.config.get<string>('ai.model') || 'mixtral-8x7b-32768';
-    const apiKey = this.config.get<string>('ai.apiKey');
-
-    if (!apiKey) {
-      this.logger.error('❌ Groq API key is missing');
-      return null;
-    }
-
-    if (!this.groqClient) {
-      this.logger.error('❌ Groq client is not initialized');
-      return null;
-    }
-
-    try {
-      this.logger.log(`📡 Calling Groq with model: ${model}`);
-
-      const response = await this.groqClient.chat.completions.create({
-        messages: [
-          { role: 'system', content: this.systemPrompt(customerContext) },
-          ...history,
-          { role: 'user', content: userMessage },
-        ],
-        model: model,
-        max_tokens: 1000,
-        temperature: 0.7,
-        // Use tools if available in the client version
-        ...(this.groqClient && {
-          tools: this.getMarketTools(),
-          tool_choice: 'auto',
-        }),
-      });
-
-      const message = response.choices[0]?.message;
-      if (!message) return null;
-
-      // Check for tool calls
-      if (message.tool_calls && message.tool_calls.length > 0) {
-        const toolCall = message.tool_calls[0];
-        if (toolCall.function.name === 'update_order_items') {
-          const args = JSON.parse(toolCall.function.arguments);
-          return this.toDraftUpdateResult(args);
-        }
-        if (toolCall.function.name === 'confirm_order') {
-          return { type: 'confirm_order' };
-        }
-      }
-
-      // If no tool call, return as text
-      if (message.content) {
-        return { type: 'text', content: message.content };
-      }
-
-      return null;
-    } catch (error: any) {
-      this.logger.error(`❌ Groq API error: ${error.message}`);
-      this.logger.error(`❌ Error details: ${JSON.stringify(error, null, 2)}`);
-      return null;
-    }
   }
 
   // ============== TOOLS ==============
@@ -481,7 +412,22 @@ export class AiService {
     };
   }
 
-  // ============== OTHER PROVIDERS (Anthropic, OpenAI, Gemini) ==============
+  // ============== GROQ ==============
+  private async callGroq(
+    userMessage: string,
+    history: ChatMessage[],
+    customerContext: string | null,
+  ): Promise<AiChatResult | null> {
+    const baseUrl = 'https://api.groq.com/openai/v1';
+    return this.callOpenAICompatible(
+      `${baseUrl}/chat/completions`,
+      userMessage,
+      history,
+      customerContext,
+    );
+  }
+
+  // ============== ANTHROPIC ==============
   private async callAnthropic(
     userMessage: string,
     history: ChatMessage[],
@@ -518,21 +464,35 @@ export class AiService {
     return textBlock?.text ? { type: 'text', content: textBlock.text } : null;
   }
 
-  private async callOpenAICompatible(
-    url: string,
-    userMessage: string,
-    history: ChatMessage[],
-    customerContext: string | null,
-  ): Promise<AiChatResult | null> {
+  // ============== OPENAI COMPATIBLE (Works with OpenRouter, OpenAI, Groq) ==============
+ private async callOpenAICompatible(
+  url: string,
+  userMessage: string,
+  history: ChatMessage[],
+  customerContext: string | null,
+): Promise<AiChatResult | null> {
+  const apiKey = this.config.get<string>('ai.apiKey');
+  const model = this.config.get<string>('ai.model') || 'meta-llama/llama-3.2-3b-instruct:free';
+
+  if (!apiKey) {
+    this.logger.error('❌ API key is missing');
+    return null;
+  }
+
+  this.logger.log(`📡 Calling OpenAI-compatible API: ${url}`);
+  this.logger.log(`📡 Model: ${model}`);
+
+  try {
     const res = await this.fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.get<string>('ai.apiKey')}`,
+        'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: this.config.get<string>('ai.model'),
+        model: model,
         max_tokens: 1000,
+        temperature: 0.7,
         messages: [
           { role: 'system', content: this.systemPrompt(customerContext) },
           ...history,
@@ -545,100 +505,155 @@ export class AiService {
 
     if (!res.ok) {
       const rawBody = await res.text();
-      let parsedError: any = null;
+      this.logger.error(`❌ API error ${res.status}: ${rawBody}`);
+      
       try {
-        parsedError = JSON.parse(rawBody);
+        const errorJson = JSON.parse(rawBody);
+        this.logger.error(`❌ Error details: ${JSON.stringify(errorJson)}`);
       } catch {
         // not JSON
       }
-      const failedGeneration = parsedError?.error?.failed_generation;
-      if (failedGeneration) {
-        this.logger.warn('Provider rejected a tool call — attempting recovery');
-        const recovered = this.tryRecoverToolCallFromText(failedGeneration);
-        if (recovered) return recovered;
-        if (/update_order_items|confirm_order|<function/i.test(failedGeneration)) {
-          return {
-            type: 'text',
-            content:
-              `Sorry, I no catch that clear 🙏 — abeg send the items again (e.g. "add 3kg tomatoes") or say *"that's all"* to confirm.`,
-          };
-        }
-        return { type: 'text', content: failedGeneration };
-      }
+      
       throw new Error(`Provider error: ${res.statusText} (${rawBody})`);
     }
+
     const data = await res.json();
     const message = data.choices?.[0]?.message;
-    if (!message) return null;
+    
+    if (!message) {
+      this.logger.warn('No message in response');
+      return null;
+    }
 
-    if (message.tool_calls?.length > 0) {
+    if (message.tool_calls && message.tool_calls.length > 0) {
       const toolCall = message.tool_calls[0];
       if (toolCall.function.name === 'update_order_items') {
-        const args = JSON.parse(toolCall.function.arguments);
-        return this.toDraftUpdateResult(args);
+        try {
+          const args = JSON.parse(toolCall.function.arguments);
+          return this.toDraftUpdateResult(args);
+        } catch (e) {
+          this.logger.error('Failed to parse tool call arguments:', e);
+        }
       }
       if (toolCall.function.name === 'confirm_order') {
         return { type: 'confirm_order' };
       }
     }
 
-    return message.content ? { type: 'text', content: message.content } : null;
+    if (message.content) {
+      return { type: 'text', content: message.content };
+    }
+
+    return null;
+  } catch (error) {
+    this.logger.error('❌ OpenAI-compatible API call failed:', error);
+    throw error;
+  }
+}
+
+
+  // ============== GEMINI ==============
+private async callGemini(
+  userMessage: string,
+  history: ChatMessage[],
+  customerContext: string | null,
+): Promise<AiChatResult | null> {
+  const apiKey = this.config.get<string>('ai.apiKey');
+  const model = this.config.get<string>('ai.model') || 'gemini-1.0-pro'; // 👈 FIX: Provide default
+
+  if (!apiKey) {
+    this.logger.error('❌ Gemini API key is missing');
+    return null;
   }
 
-  private async callGemini(
-    userMessage: string,
-    history: ChatMessage[],
-    customerContext: string | null,
-  ): Promise<AiChatResult | null> {
-    const apiKey = this.config.get<string>('ai.apiKey');
-    const model = this.config.get<string>('ai.model');
+  // Map model names to correct format
+  const modelMap: Record<string, string> = {
+    'gemini-pro': 'gemini-1.0-pro',
+    'gemini-1.0-pro': 'gemini-1.0-pro',
+    'gemini-1.5-pro': 'gemini-1.5-pro',
+    'gemini-1.5-flash': 'gemini-1.5-flash',
+    'gemini-1.5-pro-latest': 'gemini-1.5-pro',
+    'gemini-1.5-flash-latest': 'gemini-1.5-flash',
+  };
 
-    const rawContents = [
-      ...history.map((m) => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content || ' ' }],
-      })),
-      { role: 'user', parts: [{ text: userMessage }] },
-    ];
+  // 👇 FIX: Ensure model is a string before using as index
+  const actualModel = modelMap[model] || model;
+  this.logger.log(`📡 Calling Gemini with model: ${actualModel}`);
 
-    const contents: any[] = [];
-    for (const msg of rawContents) {
-      if (contents.length === 0 && msg.role !== 'user') continue;
-      const lastMsg = contents[contents.length - 1];
-      if (lastMsg && lastMsg.role === msg.role) {
-        lastMsg.parts[0].text += `\n${msg.parts[0].text}`;
-      } else {
-        contents.push(msg);
-      }
+  const rawContents = [
+    ...history.map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content || ' ' }],
+    })),
+    { role: 'user', parts: [{ text: userMessage }] },
+  ];
+
+  const contents: any[] = [];
+  for (const msg of rawContents) {
+    if (contents.length === 0 || contents[contents.length - 1].role !== msg.role) {
+      contents.push(msg);
+    } else {
+      contents[contents.length - 1].parts[0].text += `\n${msg.parts[0].text}`;
+    }
+  }
+
+  const requestBody: any = {
+    contents: contents,
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 1000,
+    },
+  };
+
+  const systemInstruction = this.systemPrompt(customerContext);
+  if (systemInstruction) {
+    requestBody.system_instruction = {
+      parts: [{ text: systemInstruction }],
+    };
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${actualModel}:generateContent?key=${apiKey}`;
+
+  try {
+    const res = await this.fetchWithTimeout(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      this.logger.error(`❌ Gemini API error ${res.status}: ${errorText}`);
+      throw new Error(`Gemini error: ${res.statusText} (${errorText})`);
     }
 
-    const res = await this.fetchWithTimeout(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: this.systemPrompt(customerContext) }] },
-          contents,
-          tools: this.getGeminiTools(),
-        }),
-      },
-    );
-
-    if (!res.ok) throw new Error(`Gemini error: ${res.statusText} (${await res.text()})`);
     const data = await res.json();
-
     const parts = data.candidates?.[0]?.content?.parts;
-    if (!parts) return null;
+    
+    if (!parts || parts.length === 0) {
+      this.logger.warn('No parts in Gemini response');
+      return null;
+    }
 
     const functionCallPart = parts.find((p: any) => p.functionCall);
-    if (functionCallPart?.functionCall.name === 'update_order_items') {
+    if (functionCallPart?.functionCall?.name === 'update_order_items') {
       return this.toDraftUpdateResult(functionCallPart.functionCall.args);
     }
-    if (functionCallPart?.functionCall.name === 'confirm_order') {
+    if (functionCallPart?.functionCall?.name === 'confirm_order') {
       return { type: 'confirm_order' };
     }
 
-    return parts[0]?.text ? { type: 'text', content: parts[0].text } : null;
+    const text = parts.map((p: any) => p.text).join(' ');
+    if (text) {
+      return { type: 'text', content: text };
+    }
+
+    return null;
+  } catch (error) {
+    this.logger.error('❌ Gemini API call failed:', error);
+    throw error;
   }
+}
 }
