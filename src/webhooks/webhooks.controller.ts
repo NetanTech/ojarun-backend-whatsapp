@@ -24,7 +24,7 @@ import { AiService, AiChatResult, OrderDraftItem } from "./ai.service";
 import { ConversationService } from "./conversation.service";
 import { EmailService } from "../email/email.service";
 import { PaystackService } from "../paystack/paystack.service";
-import { AddressValidationService } from "./address-validation.service"; // 👈 ADD THIS
+import { AddressValidationService } from "./address-validation.service";
 import { parseBudgetNaira, applyBudgetHintsFromMessage, extractBudgetItemsFromMessage } from "./budget.util";
 import { matchCatalogProduct } from "./product-match.util";
 import { randomBytes } from "crypto";
@@ -70,11 +70,46 @@ function looksLikeCartRequest(text: string): boolean {
   );
 }
 
+// ===== FIXED: Expanded market items list =====
+const MARKET_ITEMS = [
+  'beans', 'garri', 'pepper', 'titus', 'yam', 'plantain', 'corn',
+  'rice', 'flour', 'sugar', 'salt', 'maggi', 'tomato', 'onion',
+  'potato', 'kote', 'kot', 'irish potato', 'sweet potato',
+  'fish', 'chicken', 'beef', 'goat', 'egg', 'milk', 'butter',
+  'oil', 'groundnut', 'palm oil', 'vegetable oil', 'spaghetti',
+  'noodles', 'indomie', 'crayfish', 'dry fish', 'stock fish',
+  'okra', 'spinach', 'ugwu', 'waterleaf', 'cabbage', 'carrot',
+  'garlic', 'ginger', 'thyme', 'curry', 'pepper soup', 'pomo',
+  'shaki', 'roundabout', 'beef tripe', 'cow foot', 'goat head',
+  'cocoyam', 'watermelon', 'pawpaw', 'pineapple', 'banana',
+  'orange', 'apple', 'grape', 'mango', 'avocado', 'coconut'
+];
+
 /** First message already contains a shopping request — don't bury it under welcome. */
 function looksLikeOrderIntent(text: string): boolean {
+  if (!text) return false;
   const t = text.trim().toLowerCase();
+  
+  // Check if any market item is mentioned
+  const hasMarketItem = MARKET_ITEMS.some(item => t.includes(item));
+  if (hasMarketItem) return true;
+  
+  // Check for numbers with items (e.g., "2kg rice", "3 tubers yam")
+  const hasNumberWithItem = /\b(\d+)\s*(?:kg|kilo|bag|bottle|pack|cups?|pieces?|tuber|tubers|congo|tray|trays)\s+\w+/i.test(t);
+  if (hasNumberWithItem) return true;
+  
+  // Check for money amounts with items (e.g., "rice 2000", "fish 5k")
+  const hasMoneyWithItem = /\b(\w+)\s+\d+[k]?\b/.test(t) || /\b\d+[k]?\s+\w+\b/.test(t);
+  if (hasMoneyWithItem) return true;
+  
+  // Check for "I want" patterns without specific items
+  if (/\b(wan|want|buy|get|order|need|i want|i wan|i need|get me|add|bring|send)\b/.test(t)) {
+    if (t.length > 5) return true;
+  }
+  
+  // Original checks
   return (
-    /\b(buy|wan\b|want|order|need|get me|add)\b/.test(t) ||
+    /\b(buy|wan\b|want|order|need|get me|add|bring|send)\b/.test(t) ||
     /\b(\d+\s*k\b|\d+\s*thousand|naira|₦|\bkg\b|\bbag\b|\bkilo\b|\bkilos\b)\b/.test(t)
   );
 }
@@ -94,13 +129,11 @@ function looksLikeSameAddressRequest(text: string): boolean {
   return /\bsame\s+(address|location|place|delivery)\b/i.test(text);
 }
 
-// ===== NEW: Check if message looks like an address =====
+// ===== Check if message looks like an address =====
 function looksLikeAddress(text: string): boolean {
   const t = text.trim().toLowerCase();
-  // Must be at least 5 characters
   if (t.length < 5) return false;
   
-  // Check for address indicators
   const addressIndicators = [
     'ibadan', 'ui', 'gate', 'road', 'street', 'avenue', 
     'close', 'crescent', 'drive', 'lane', 'way', 'boulevard',
@@ -112,10 +145,8 @@ function looksLikeAddress(text: string): boolean {
   const hasIndicator = addressIndicators.some(indicator => t.includes(indicator));
   if (hasIndicator) return true;
   
-  // Check for numbers + road/street pattern
   if (/\d+\s+(road|street|avenue|close|drive|lane)/i.test(t)) return true;
   
-  // Check for known Ibadan areas
   const ibadanAreas = [
     'bodija', 'soka', 'agodi', 'alaafin', 'apata', 'challenge',
     'eleyele', 'gbagi', 'jericho', 'mokola', 'monatan', 'ojo',
@@ -138,7 +169,7 @@ export class WebhooksController {
     private readonly conversations: ConversationService,
     private readonly email: EmailService,
     private readonly paystack: PaystackService,
-    private readonly addressValidation: AddressValidationService, // 👈 ADD THIS
+    private readonly addressValidation: AddressValidationService,
   ) {}
 
   @Get()
@@ -168,9 +199,6 @@ export class WebhooksController {
           try {
             await this.handleInboundMessage(msg, value.contacts ?? []);
           } catch (error) {
-            // One bad message shouldn't take the rest of this batch down —
-            // log it and keep going instead of throwing to Meta (which just
-            // triggers a retry that re-hits the same failure).
             this.logger.error(`Failed to process inbound message wamid=${msg?.id}`, error as Error);
           }
         }
@@ -186,7 +214,6 @@ export class WebhooksController {
     const wamid: string = msg.id;
     const from: string = msg.from;
 
-    // 1. Idempotency check
     const existing = await this.prisma.message.findUnique({
       where: { whatsappMessageId: wamid },
     });
@@ -195,9 +222,6 @@ export class WebhooksController {
       return;
     }
 
-    // 2. Resolve phone format + upsert Customer. New-vs-returning has to be
-    // determined BEFORE the upsert — upsert always returns a row with
-    // createdAt populated, so checking it afterward never detects "new".
     const whatsappNumber = from.startsWith("+") ? from : `+${from}`;
     const profileName = contacts.find((c) => c.wa_id === from)?.profile?.name;
 
@@ -210,13 +234,9 @@ export class WebhooksController {
       update: profileName ? { name: profileName } : {},
     });
 
-    // 3. Resolve (or open) this customer's active conversation session.
     const conversation = await this.conversations.getOrCreateActive(customer.id);
     const bodyText = msg.type === "text" ? (msg.text?.body ?? null) : null;
 
-    // 4. Fetch conversation-scoped history BEFORE saving the current
-    // message — avoids the old skip-the-first-row guesswork, and scopes
-    // context to this session rather than the customer's entire lifetime.
     const threadHistory = bodyText
       ? await this.prisma.message.findMany({
           where: { sessionId: conversation.id, body: { not: null } },
@@ -232,7 +252,6 @@ export class WebhooksController {
         content: m.body!,
       }));
 
-    // 5. Save incoming message to the timeline, scoped to this conversation.
     try {
       await this.prisma.message.create({
         data: {
@@ -253,11 +272,8 @@ export class WebhooksController {
     }
 
     await this.conversations.touch(conversation.id);
-
     this.logger.log(`Inbound [${whatsappNumber}]: ${bodyText ?? `[${msg.type}]`}`);
 
-    // Human handoff: if an admin has taken over this customer, still store
-    // the inbound message but skip bot/AI auto-replies.
     const handoff = await this.prisma.conversations.findUnique({
       where: { customer_id: customer.id },
       select: { mode: true, assigned_admin_id: true },
@@ -269,12 +285,6 @@ export class WebhooksController {
       return;
     }
 
-    // WhatsApp Cloud API delivers voice notes as type "audio" with only a
-    // media id — no transcription, so there's no text for the AI to work
-    // with. Without this, it silently fell through to the generic welcome
-    // fallback, which looks like the bot ignored them. Catching audio
-    // messages generally (not just flagged voice notes) since a plain
-    // audio file attachment can't be processed either.
     if (msg.type === "audio") {
       await this.sendAndLog(
         customer.id,
@@ -285,7 +295,6 @@ export class WebhooksController {
       return;
     }
 
-    // ===== CHECK: If we're in the middle of asking for quantities =====
     const pendingItems = await this.conversations.getPendingItems(conversation.id);
     if (pendingItems.length > 0 && bodyText) {
       const handled = await this.handleQuantityResponse(
@@ -301,7 +310,6 @@ export class WebhooksController {
       }
     }
 
-    // ===== NEW: Check if this looks like an address input =====
     if (bodyText && looksLikeAddress(bodyText)) {
       const addressHandled = await this.handleAddressInput(
         customer.id,
@@ -315,7 +323,19 @@ export class WebhooksController {
       }
     }
 
-    // 6. Fallback static keyword router
+    // ===== FIXED: Check for order intent BEFORE welcome =====
+    if (bodyText && looksLikeOrderIntent(bodyText)) {
+      await this.processOrderMessage(
+        customer.id,
+        conversation.id,
+        whatsappNumber,
+        bodyText,
+        formattedHistory,
+        customer.contextSummary,
+      );
+      return;
+    }
+
     const replyKey = this.resolveReplyKey(bodyText, isNewCustomer);
 
     if (replyKey === "order_prompt") {
@@ -326,330 +346,18 @@ export class WebhooksController {
       });
     }
 
-    // 7. Dynamic AI conversation routing
     if (replyKey === "default" && bodyText) {
-      const existingDraft = await this.conversations.getDraft(conversation.id);
-      const isDeterministicConfirm =
-        CONFIRM_PHRASES.has(normalizeForConfirmCheck(bodyText)) && existingDraft.items.length > 0;
-
-      if (!isDeterministicConfirm && looksLikePayNowRequest(bodyText)) {
-        const handled = await this.handlePayNowRequest(
-          customer.id,
-          conversation.id,
-          whatsappNumber,
-        );
-        if (handled) return;
-      }
-
-      // "Same address" → reuse last delivery address from a prior order
-      if (!isDeterministicConfirm && looksLikeSameAddressRequest(bodyText)) {
-        const lastAddress = await this.getLastDeliveryAddress(customer.id);
-        if (lastAddress) {
-          // Validate the last address
-          const validated = await this.addressValidation.validateAddress(lastAddress);
-          const { items, deliveryAddress } = await this.conversations.mergeDraft(
-            conversation.id,
-            [],
-            lastAddress,
-          );
-          
-          let draftSummary = `Noted! Here's your list so far:\n\n`;
-          if (items.length === 0) {
-            draftSummary += `(No items yet — drop wetin you wan buy.)\n`;
-          } else {
-            items.forEach((item) => {
-              draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
-            });
-          }
-          
-          if (validated) {
-            draftSummary += `\n📍 *Delivery to:* ${validated.formatted}`;
-            if (validated.neighborhood) {
-              draftSummary += `\n📍 *Area:* ${validated.neighborhood}`;
-            }
-          } else {
-            draftSummary += `\n📍 *Delivery to:* ${deliveryAddress}`;
-          }
-          
-          draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
-          await this.sendAndLog(customer.id, conversation.id, whatsappNumber, draftSummary);
-          return;
-        }
-      }
-
-      // Cart/list questions must read the real draft — never let the model invent items
-      if (!isDeterministicConfirm && looksLikeCartRequest(bodyText)) {
-        if (existingDraft.items.length === 0) {
-          await this.sendAndLog(
-            customer.id,
-            conversation.id,
-            whatsappNumber,
-            `Your cart empty for now 🛒 — just drop the items you want make we start packing am.`,
-          );
-          return;
-        }
-        let cartSummary = `Your current order:\n\n`;
-        existingDraft.items.forEach((item) => {
-          cartSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
-        });
-        cartSummary += existingDraft.deliveryAddress
-          ? `\n📍 Delivery to: ${existingDraft.deliveryAddress}`
-          : `\n⚠️ Still need your delivery address.`;
-        cartSummary += `\n\nAdd/remove items anytime, or say *"that's all"* when you're ready.`;
-        await this.sendAndLog(customer.id, conversation.id, whatsappNumber, cartSummary);
-        return;
-      }
-
-      const aiResult: AiChatResult | null = isDeterministicConfirm
-        ? { type: "confirm_order" }
-        : await this.ai.chat(bodyText, formattedHistory, customer.contextSummary ?? null);
-
-      const resolved = this.resolveDraftFromAiOrMessage(bodyText, aiResult);
-
-      if (resolved?.type === "draft_update") {
-        const itemsWithoutQuantities = resolved.items.filter(
-          item => item.quantity <= 0 || (item.unit === 'pieces' && item.quantity === 1)
-        );
-
-        if (itemsWithoutQuantities.length > 0 && !resolved.deliveryAddress) {
-          const itemNames = itemsWithoutQuantities.map(item => item.name);
-          await this.conversations.setPendingItems(conversation.id, itemNames);
-          
-          await this.sendAndLog(
-            customer.id,
-            conversation.id,
-            whatsappNumber,
-            `Got it! Let me get the quantities:\n\nHow much *${itemNames[0]}* do you want? (e.g., "2 cups", "1 kg", "N500 worth")`
-          );
-          return;
-        }
-
-        if (resolved.items.length > 0) {
-          const { items, deliveryAddress } = await this.conversations.mergeDraft(
-            conversation.id,
-            resolved.items,
-            resolved.deliveryAddress,
-          );
-
-          let draftSummary = `Noted! Here's your list so far:\n\n`;
-          if (items.length === 0) {
-            draftSummary += `(No items yet — drop wetin you wan buy.)\n`;
-          } else {
-            items.forEach((item) => {
-              draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
-            });
-          }
-          
-          // Check if we have a validated address
-          const addressInfo = await this.conversations.getDeliveryAddress(conversation.id);
-          if (addressInfo.address) {
-            if (addressInfo.formatted) {
-              draftSummary += `\n📍 *Delivery to:* ${addressInfo.formatted}`;
-            } else {
-              draftSummary += `\n📍 *Delivery to:* ${addressInfo.address}`;
-            }
-            if (addressInfo.neighborhood) {
-              draftSummary += `\n📍 *Area:* ${addressInfo.neighborhood}`;
-            }
-          } else if (deliveryAddress) {
-            draftSummary += `\n📍 *Delivery to:* ${deliveryAddress}`;
-          } else {
-            draftSummary += `\n⚠️ Still need your delivery address — just drop it whenever you're ready.`;
-          }
-          
-          draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
-
-          await this.sendAndLog(customer.id, conversation.id, whatsappNumber, draftSummary);
-          return;
-        }
-      }
-
-      if (resolved?.type === "confirm_order") {
-        const draft = await this.conversations.getDraft(conversation.id);
-        const addressInfo = await this.conversations.getDeliveryAddress(conversation.id);
-
-        if (draft.items.length === 0) {
-          await this.sendAndLog(
-            customer.id,
-            conversation.id,
-            whatsappNumber,
-            `You never tell me wetin you wan buy yet 🙏 — just drop your list and we go start!`,
-          );
-          return;
-        }
-
-        if (!draft.deliveryAddress && !addressInfo.address) {
-          await this.sendAndLog(
-            customer.id,
-            conversation.id,
-            whatsappNumber,
-            `Almost there! 📍 I still need your delivery address before I fit place this order — just drop it and say *"that's all"* again to confirm.`,
-          );
-          return;
-        }
-
-        // Use the validated address if available
-        const finalAddress = addressInfo.formatted || addressInfo.address || draft.deliveryAddress;
-
-        const pricedItems = await this.priceDraftItems(draft.items);
-        const totalNaira = pricedItems.reduce(
-          (sum, item) => sum + item.lineTotal,
-          0,
-        );
-        const allPriced = pricedItems.every((item) => item.unitPrice > 0);
-        const paystackRef = `oja_${randomBytes(8).toString("hex")}`;
-
-        const createdOrder = await this.prisma.$transaction(async (tx) => {
-          await tx.pendingOrder.updateMany({
-            where: { phone: whatsappNumber, completed: false },
-            data: { completed: true },
-          });
-
-          const order = await tx.order.create({
-            data: {
-              customerId: customer.id,
-              channel: Channel.whatsapp,
-              status: OrderStatus.pending,
-              paymentStatus: PaymentStatus.unpaid,
-              total: new Prisma.Decimal(totalNaira.toFixed(2)),
-              customerNotes: finalAddress,
-              paystackReference: paystackRef,
-            },
-          });
-
-          for (const item of pricedItems) {
-            await tx.orderItem.create({
-              data: {
-                orderId: order.id,
-                productId: item.productId,
-                productNameSnapshot: item.name,
-                unitSnapshot: item.unit,
-                unitPriceSnapshot: new Prisma.Decimal(item.unitPrice.toFixed(2)),
-                quantity: new Prisma.Decimal(item.quantity),
-              },
-            });
-          }
-
-          return order;
-        });
-
-        await this.conversations.clearDraft(conversation.id);
-        await this.conversations.clearPendingItems(conversation.id);
-        await this.conversations.closeSession(conversation.id);
-
-        this.conversations
-          .summarizeSession(conversation.id)
-          .catch((err) => this.logger.error(`Immediate summarization failed for session ${conversation.id}`, err));
-
-        this.logger.log(`Order processed transactionally for ${whatsappNumber}`);
-
-        void this.email.sendNewOrderNotification({
-          orderId: createdOrder.id,
-          customerName: customer.name,
-          whatsappNumber,
-          items: draft.items,
-          deliveryAddress: finalAddress,
-          createdAt: createdOrder.createdAt,
-        });
-
-        const { window, day } = getDeliveryWindow();
-        let customerInvoiceReceipt = `E don set! 🔥 I have compiled your OjaRun market order list:\n\n`;
-        pricedItems.forEach((item) => {
-          const priceBit =
-            item.unitPrice > 0
-              ? ` — ₦${(item.lineTotal).toLocaleString("en-NG")}`
-              : "";
-          customerInvoiceReceipt += `🔸 *${item.name}* — ${item.quantity} ${item.unit}${priceBit}\n`;
-        });
-        customerInvoiceReceipt += `\n📍 *Delivery to:* ${finalAddress}`;
-        if (addressInfo.neighborhood) {
-          customerInvoiceReceipt += `\n📍 *Area:* ${addressInfo.neighborhood}`;
-        }
-        customerInvoiceReceipt += `\n🚴 *Delivery Schedule:* ${window} ${day}`;
-
-        if (allPriced && totalNaira >= 1) {
-          customerInvoiceReceipt += `\n\n💰 *Subtotal:* ₦${totalNaira.toLocaleString("en-NG")}`;
-
-          if (!this.paystack.isConfigured()) {
-            this.logger.warn(
-              `Order ${createdOrder.id} priced (₦${totalNaira}) but Paystack keys are missing`,
-            );
-            customerInvoiceReceipt += `\n\nOrder received — payment link go follow sharp-sharp. 🙏`;
-          } else {
-            const webAppUrl = this.config.get<string>("webAppUrl") || "";
-            const callbackUrl = webAppUrl
-              ? `${webAppUrl.replace(/\/$/, "")}/payment/callback`
-              : undefined;
-            const payEmail = `${whatsappNumber.replace(/\D/g, "")}@whatsapp.ojarun.ng`;
-
-            const payment = await this.paystack.initializeTransaction({
-              email: payEmail,
-              amountNaira: totalNaira,
-              reference: paystackRef,
-              callbackUrl,
-              metadata: {
-                orderId: createdOrder.id,
-                channel: "whatsapp",
-                customerId: customer.id,
-              },
-            });
-
-            if (payment.ok && payment.authorizationUrl) {
-              await this.prisma.order.update({
-                where: { id: createdOrder.id },
-                data: {
-                  status: OrderStatus.awaiting_payment,
-                  paymentStatus: PaymentStatus.pending,
-                  paymentUrl: payment.authorizationUrl,
-                },
-              });
-
-              customerInvoiceReceipt += `\n\nTap *Pay now* to complete checkout. Once payment clears, our market shoppers start shopping. 🙏`;
-
-              await this.sendPaymentAndLog(
-                customer.id,
-                conversation.id,
-                whatsappNumber,
-                customerInvoiceReceipt,
-                payment.authorizationUrl,
-              );
-              return;
-            }
-
-            this.logger.error(
-              `Paystack init failed for order ${createdOrder.id}: ${payment.error}`,
-            );
-            customerInvoiceReceipt += `\n\nPayment link no gree open just now — our team go send am sharp-sharp. 🙏`;
-          }
-        } else {
-          const unpriced = pricedItems.filter((i) => i.unitPrice <= 0).map((i) => i.name);
-          this.logger.warn(
-            `Order ${createdOrder.id}: no payment link — allPriced=${allPriced} total=₦${totalNaira} paystack=${this.paystack.isConfigured()} unpriced=[${unpriced.join(", ")}]`,
-          );
-          customerInvoiceReceipt += `\n\nOur market shoppers are handling it. We will send over your subtotal breakdown once pricing finishes! 🙏`;
-        }
-
-        await this.sendAndLog(customer.id, conversation.id, whatsappNumber, customerInvoiceReceipt);
-        return;
-      }
-
-      if (resolved?.type === "text") {
-        if (
-          /<function[=/(]|update_order_items\s*\)?\s*\(?\s*\{|confirm_order\s*\(/i.test(
-            resolved.content,
-          )
-        ) {
-          this.logger.warn(
-            `Suppressed outbound tool-syntax leak: ${resolved.content.slice(0, 160)}`,
-          );
-          return;
-        }
-        await this.sendAndLog(customer.id, conversation.id, whatsappNumber, resolved.content);
-        return;
-      }
+      await this.processOrderMessage(
+        customer.id,
+        conversation.id,
+        whatsappNumber,
+        bodyText,
+        formattedHistory,
+        customer.contextSummary,
+      );
+      return;
     }
 
-    // 8. Static keyed fallback route
     const botResponse = await this.prisma.botResponse.findUnique({
       where: { key: replyKey },
     });
@@ -670,23 +378,374 @@ export class WebhooksController {
     await this.sendAndLog(customer.id, conversation.id, whatsappNumber, staticMessageBody);
   }
 
-  // ===== NEW: Handle address input =====
+  // ===== Process order messages =====
+  private async processOrderMessage(
+    customerId: string,
+    conversationId: string,
+    whatsappNumber: string,
+    bodyText: string,
+    history: { role: 'user' | 'assistant'; content: string }[],
+    customerContext: string | null,
+  ): Promise<void> {
+    const existingDraft = await this.conversations.getDraft(conversationId);
+    const isDeterministicConfirm =
+      CONFIRM_PHRASES.has(normalizeForConfirmCheck(bodyText)) && existingDraft.items.length > 0;
+
+    if (!isDeterministicConfirm && looksLikePayNowRequest(bodyText)) {
+      const handled = await this.handlePayNowRequest(
+        customerId,
+        conversationId,
+        whatsappNumber,
+      );
+      if (handled) return;
+    }
+
+    if (!isDeterministicConfirm && looksLikeSameAddressRequest(bodyText)) {
+      const lastAddress = await this.getLastDeliveryAddress(customerId);
+      if (lastAddress) {
+        const validated = await this.addressValidation.validateAddress(lastAddress);
+        const { items, deliveryAddress } = await this.conversations.mergeDraft(
+          conversationId,
+          [],
+          lastAddress,
+        );
+        
+        let draftSummary = `Noted! Here's your list so far:\n\n`;
+        if (items.length === 0) {
+          draftSummary += `(No items yet — drop wetin you wan buy.)\n`;
+        } else {
+          items.forEach((item) => {
+            draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
+          });
+        }
+        
+        if (validated) {
+          draftSummary += `\n📍 *Delivery to:* ${validated.formatted}`;
+          if (validated.neighborhood) {
+            draftSummary += `\n📍 *Area:* ${validated.neighborhood}`;
+          }
+        } else {
+          draftSummary += `\n📍 *Delivery to:* ${deliveryAddress}`;
+        }
+        
+        draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
+        await this.sendAndLog(customerId, conversationId, whatsappNumber, draftSummary);
+        return;
+      }
+    }
+
+    if (!isDeterministicConfirm && looksLikeCartRequest(bodyText)) {
+      if (existingDraft.items.length === 0) {
+        await this.sendAndLog(
+          customerId,
+          conversationId,
+          whatsappNumber,
+          `Your cart empty for now 🛒 — just drop the items you want make we start packing am.`,
+        );
+        return;
+      }
+      let cartSummary = `Your current order:\n\n`;
+      existingDraft.items.forEach((item) => {
+        cartSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
+      });
+      cartSummary += existingDraft.deliveryAddress
+        ? `\n📍 Delivery to: ${existingDraft.deliveryAddress}`
+        : `\n⚠️ Still need your delivery address.`;
+      cartSummary += `\n\nAdd/remove items anytime, or say *"that's all"* when you're ready.`;
+      await this.sendAndLog(customerId, conversationId, whatsappNumber, cartSummary);
+      return;
+    }
+
+    const aiResult: AiChatResult | null = isDeterministicConfirm
+      ? { type: "confirm_order" }
+      : await this.ai.chat(bodyText, history, customerContext);
+
+    const resolved = this.resolveDraftFromAiOrMessage(bodyText, aiResult);
+
+    if (resolved?.type === "draft_update") {
+      const itemsWithoutQuantities = resolved.items.filter(
+        item => item.quantity <= 0 || (item.unit === 'pieces' && item.quantity === 1)
+      );
+
+      if (itemsWithoutQuantities.length > 0 && !resolved.deliveryAddress) {
+        const itemNames = itemsWithoutQuantities.map(item => item.name);
+        await this.conversations.setPendingItems(conversationId, itemNames);
+        
+        await this.sendAndLog(
+          customerId,
+          conversationId,
+          whatsappNumber,
+          `Got it! Let me get the quantities:\n\nHow much *${itemNames[0]}* do you want? (e.g., "2 cups", "1 kg", "N500 worth")`
+        );
+        return;
+      }
+
+      if (resolved.items.length > 0) {
+        const { items, deliveryAddress } = await this.conversations.mergeDraft(
+          conversationId,
+          resolved.items,
+          resolved.deliveryAddress,
+        );
+
+        let draftSummary = `Noted! Here's your list so far:\n\n`;
+        if (items.length === 0) {
+          draftSummary += `(No items yet — drop wetin you wan buy.)\n`;
+        } else {
+          items.forEach((item) => {
+            draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
+          });
+        }
+        
+        const addressInfo = await this.conversations.getDeliveryAddress(conversationId);
+        if (addressInfo.address) {
+          if (addressInfo.formatted) {
+            draftSummary += `\n📍 *Delivery to:* ${addressInfo.formatted}`;
+          } else {
+            draftSummary += `\n📍 *Delivery to:* ${addressInfo.address}`;
+          }
+          if (addressInfo.neighborhood) {
+            draftSummary += `\n📍 *Area:* ${addressInfo.neighborhood}`;
+          }
+        } else if (deliveryAddress) {
+          draftSummary += `\n📍 *Delivery to:* ${deliveryAddress}`;
+        } else {
+          draftSummary += `\n⚠️ Still need your delivery address — just drop it whenever you're ready.`;
+        }
+        
+        draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
+
+        await this.sendAndLog(customerId, conversationId, whatsappNumber, draftSummary);
+        return;
+      }
+    }
+
+    if (resolved?.type === "confirm_order") {
+      await this.confirmOrder(
+        customerId,
+        conversationId,
+        whatsappNumber,
+      );
+      return;
+    }
+
+    if (resolved?.type === "text") {
+      if (
+        /<function[=/(]|update_order_items\s*\)?\s*\(?\s*\{|confirm_order\s*\(/i.test(
+          resolved.content,
+        )
+      ) {
+        this.logger.warn(
+          `Suppressed outbound tool-syntax leak: ${resolved.content.slice(0, 160)}`,
+        );
+        return;
+      }
+      await this.sendAndLog(customerId, conversationId, whatsappNumber, resolved.content);
+      return;
+    }
+  }
+
+  // ===== Confirm order method =====
+  private async confirmOrder(
+    customerId: string,
+    conversationId: string,
+    whatsappNumber: string,
+  ): Promise<void> {
+    const draft = await this.conversations.getDraft(conversationId);
+    const addressInfo = await this.conversations.getDeliveryAddress(conversationId);
+
+    if (draft.items.length === 0) {
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        `You never tell me wetin you wan buy yet 🙏 — just drop your list and we go start!`,
+      );
+      return;
+    }
+
+    if (!draft.deliveryAddress && !addressInfo.address) {
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        `Almost there! 📍 I still need your delivery address before I fit place this order — just drop it and say *"that's all"* again to confirm.`,
+      );
+      return;
+    }
+
+    const finalAddress = addressInfo.formatted || addressInfo.address || draft.deliveryAddress;
+
+    const pricedItems = await this.priceDraftItems(draft.items);
+    const totalNaira = pricedItems.reduce(
+      (sum, item) => sum + item.lineTotal,
+      0,
+    );
+    const allPriced = pricedItems.every((item) => item.unitPrice > 0);
+    const paystackRef = `oja_${randomBytes(8).toString("hex")}`;
+
+    // ===== FIXED: Get customer with proper null handling =====
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { name: true },
+    });
+
+    const createdOrder = await this.prisma.$transaction(async (tx) => {
+      await tx.pendingOrder.updateMany({
+        where: { phone: whatsappNumber, completed: false },
+        data: { completed: true },
+      });
+
+      const order = await tx.order.create({
+        data: {
+          customerId: customerId,
+          channel: Channel.whatsapp,
+          status: OrderStatus.pending,
+          paymentStatus: PaymentStatus.unpaid,
+          total: new Prisma.Decimal(totalNaira.toFixed(2)),
+          customerNotes: finalAddress,
+          paystackReference: paystackRef,
+        },
+      });
+
+      for (const item of pricedItems) {
+        await tx.orderItem.create({
+          data: {
+            orderId: order.id,
+            productId: item.productId,
+            productNameSnapshot: item.name,
+            unitSnapshot: item.unit,
+            unitPriceSnapshot: new Prisma.Decimal(item.unitPrice.toFixed(2)),
+            quantity: new Prisma.Decimal(item.quantity),
+          },
+        });
+      }
+
+      return order;
+    });
+
+    await this.conversations.clearDraft(conversationId);
+    await this.conversations.clearPendingItems(conversationId);
+    await this.conversations.closeSession(conversationId);
+
+    this.conversations
+      .summarizeSession(conversationId)
+      .catch((err) => this.logger.error(`Immediate summarization failed for session ${conversationId}`, err));
+
+    this.logger.log(`Order processed transactionally for ${whatsappNumber}`);
+
+    // ===== FIXED: Send email with proper types =====
+    try {
+      await this.email.sendNewOrderNotification({
+        orderId: createdOrder.id,
+        customerName: customer?.name ?? null, // 👈 Convert undefined to null
+        whatsappNumber: whatsappNumber,
+        items: draft.items.map(item => ({
+          name: item.name,
+          quantity: item.quantity,
+          unit: item.unit,
+        })),
+        deliveryAddress: finalAddress ?? null, // 👈 Convert undefined to null
+        createdAt: createdOrder.createdAt,
+      });
+    } catch (emailError) {
+      // Don't let email failure break the order flow
+      this.logger.error(`Failed to send order notification email for order ${createdOrder.id}`, emailError);
+    }
+
+    const { window, day } = getDeliveryWindow();
+    let customerInvoiceReceipt = `E don set! 🔥 I have compiled your OjaRun market order list:\n\n`;
+    pricedItems.forEach((item) => {
+      const priceBit =
+        item.unitPrice > 0
+          ? ` — ₦${(item.lineTotal).toLocaleString("en-NG")}`
+          : "";
+      customerInvoiceReceipt += `🔸 *${item.name}* — ${item.quantity} ${item.unit}${priceBit}\n`;
+    });
+    customerInvoiceReceipt += `\n📍 *Delivery to:* ${finalAddress}`;
+    if (addressInfo.neighborhood) {
+      customerInvoiceReceipt += `\n📍 *Area:* ${addressInfo.neighborhood}`;
+    }
+    customerInvoiceReceipt += `\n🚴 *Delivery Schedule:* ${window} ${day}`;
+
+    if (allPriced && totalNaira >= 1) {
+      customerInvoiceReceipt += `\n\n💰 *Subtotal:* ₦${totalNaira.toLocaleString("en-NG")}`;
+
+      if (!this.paystack.isConfigured()) {
+        this.logger.warn(
+          `Order ${createdOrder.id} priced (₦${totalNaira}) but Paystack keys are missing`,
+        );
+        customerInvoiceReceipt += `\n\nOrder received — payment link go follow sharp-sharp. 🙏`;
+      } else {
+        const webAppUrl = this.config.get<string>("webAppUrl") || "";
+        const callbackUrl = webAppUrl
+          ? `${webAppUrl.replace(/\/$/, "")}/payment/callback`
+          : undefined;
+        const payEmail = `${whatsappNumber.replace(/\D/g, "")}@whatsapp.ojarun.ng`;
+
+        const payment = await this.paystack.initializeTransaction({
+          email: payEmail,
+          amountNaira: totalNaira,
+          reference: paystackRef,
+          callbackUrl,
+          metadata: {
+            orderId: createdOrder.id,
+            channel: "whatsapp",
+            customerId: customerId,
+          },
+        });
+
+        if (payment.ok && payment.authorizationUrl) {
+          await this.prisma.order.update({
+            where: { id: createdOrder.id },
+            data: {
+              status: OrderStatus.awaiting_payment,
+              paymentStatus: PaymentStatus.pending,
+              paymentUrl: payment.authorizationUrl,
+            },
+          });
+
+          customerInvoiceReceipt += `\n\nTap *Pay now* to complete checkout. Once payment clears, our market shoppers start shopping. 🙏`;
+
+          await this.sendPaymentAndLog(
+            customerId,
+            conversationId,
+            whatsappNumber,
+            customerInvoiceReceipt,
+            payment.authorizationUrl,
+          );
+          return;
+        }
+
+        this.logger.error(
+          `Paystack init failed for order ${createdOrder.id}: ${payment.error}`,
+        );
+        customerInvoiceReceipt += `\n\nPayment link no gree open just now — our team go send am sharp-sharp. 🙏`;
+      }
+    } else {
+      const unpriced = pricedItems.filter((i) => i.unitPrice <= 0).map((i) => i.name);
+      this.logger.warn(
+        `Order ${createdOrder.id}: no payment link — allPriced=${allPriced} total=₦${totalNaira} paystack=${this.paystack.isConfigured()} unpriced=[${unpriced.join(", ")}]`,
+      );
+      customerInvoiceReceipt += `\n\nOur market shoppers are handling it. We will send over your subtotal breakdown once pricing finishes! 🙏`;
+    }
+
+    await this.sendAndLog(customerId, conversationId, whatsappNumber, customerInvoiceReceipt);
+  }
+
+  // ===== Handle address input =====
   private async handleAddressInput(
     customerId: string,
     conversationId: string,
     whatsappNumber: string,
     bodyText: string,
   ): Promise<boolean> {
-    // Validate the address
     const result = await this.addressValidation.validateAndFormatResponse(bodyText);
 
     if (!result.valid) {
-      // Address is invalid - show helpful message
       await this.sendAndLog(customerId, conversationId, whatsappNumber, result.message);
       return true;
     }
 
-    // Address is valid - store it with metadata
     if (result.validatedAddress) {
       await this.conversations.setDeliveryAddress(
         conversationId,
@@ -698,7 +757,6 @@ export class WebhooksController {
         }
       );
 
-      // Get current draft to show full list with address
       const draft = await this.conversations.getDraft(conversationId);
       const addressInfo = await this.conversations.getDeliveryAddress(conversationId);
       
@@ -1103,13 +1161,26 @@ export class WebhooksController {
     }
   }
 
+  // ===== FIXED: resolveReplyKey checks order intent first =====
   private resolveReplyKey(body: string | null, isNewCustomer: boolean): string {
+    if (!body) {
+      if (isNewCustomer) return "welcome";
+      return "default";
+    }
+    
+    const text = body.trim().toUpperCase();
+    
+    // Check for order intent FIRST - this is the key fix
+    if (looksLikeOrderIntent(body)) {
+      return "default";
+    }
+    
+    // Then check for new customer welcome
     if (isNewCustomer) {
-      if (body && looksLikeOrderIntent(body)) return "default";
       return "welcome";
     }
-    const text = (body ?? "").trim().toUpperCase();
-
+    
+    // Existing customer keywords
     if (text === "MENU" || text.includes("WETIN DEY")) return "menu";
     if (text === "ORDER" || text === "I WANT TO BUY" || text === "I WAN BUY") return "order_prompt";
     if (text === "HELP") return "help";
