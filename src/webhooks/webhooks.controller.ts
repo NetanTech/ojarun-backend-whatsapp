@@ -70,7 +70,7 @@ function looksLikeCartRequest(text: string): boolean {
   );
 }
 
-// ===== FIXED: Expanded market items list =====
+// ===== Expanded market items list =====
 const MARKET_ITEMS = [
   'beans', 'garri', 'pepper', 'titus', 'yam', 'plantain', 'corn',
   'rice', 'flour', 'sugar', 'salt', 'maggi', 'tomato', 'onion',
@@ -88,18 +88,20 @@ const MARKET_ITEMS = [
 /** First message already contains a shopping request — don't bury it under welcome. */
 function looksLikeOrderIntent(text: string): boolean {
   if (!text) return false;
-  const t = text.trim().toLowerCase();
+  
+  // ===== FIX: Combine multi-line text with proper typing =====
+  const t: string = text.trim().toLowerCase().replace(/\n/g, ' ');
   
   // Check if any market item is mentioned
-  const hasMarketItem = MARKET_ITEMS.some(item => t.includes(item));
+  const hasMarketItem = MARKET_ITEMS.some((item: string) => t.includes(item));
   if (hasMarketItem) return true;
   
   // Check for numbers with items (e.g., "2kg rice", "3 tubers yam")
-  const hasNumberWithItem = /\b(\d+)\s*(?:kg|kilo|bag|bottle|pack|cups?|pieces?|tuber|tubers|congo|tray|trays)\s+\w+/i.test(t);
+  const hasNumberWithItem: boolean = /\b(\d+)\s*(?:kg|kilo|bag|bottle|pack|cups?|pieces?|tuber|tubers|congo|tray|trays)\s+\w+/i.test(t);
   if (hasNumberWithItem) return true;
   
   // Check for money amounts with items (e.g., "rice 2000", "fish 5k")
-  const hasMoneyWithItem = /\b(\w+)\s+\d+[k]?\b/.test(t) || /\b\d+[k]?\s+\w+\b/.test(t);
+  const hasMoneyWithItem: boolean = /\b(\w+)\s+\d+[k]?\b/.test(t) || /\b\d+[k]?\s+\w+\b/.test(t);
   if (hasMoneyWithItem) return true;
   
   // Check for "I want" patterns without specific items
@@ -207,176 +209,183 @@ export class WebhooksController {
     return { ok: true };
   }
 
-  private async handleInboundMessage(
-    msg: any,
-    contacts: Array<{ wa_id: string; profile?: { name?: string } }>,
-  ): Promise<void> {
-    const wamid: string = msg.id;
-    const from: string = msg.from;
+private async handleInboundMessage(
+  msg: any,
+  contacts: Array<{ wa_id: string; profile?: { name?: string } }>,
+): Promise<void> {
+  const wamid: string = msg.id;
+  const from: string = msg.from;
 
-    const existing = await this.prisma.message.findUnique({
-      where: { whatsappMessageId: wamid },
-    });
-    if (existing) {
-      this.logger.debug(`Skipping duplicate message wamid=${wamid}`);
-      return;
-    }
-
-    const whatsappNumber = from.startsWith("+") ? from : `+${from}`;
-    const profileName = contacts.find((c) => c.wa_id === from)?.profile?.name;
-
-    const existingCustomer = await this.prisma.customer.findUnique({ where: { whatsappNumber } });
-    const isNewCustomer = !existingCustomer;
-
-    const customer = await this.prisma.customer.upsert({
-      where: { whatsappNumber },
-      create: { whatsappNumber, name: profileName ?? null },
-      update: profileName ? { name: profileName } : {},
-    });
-
-    const conversation = await this.conversations.getOrCreateActive(customer.id);
-    const bodyText = msg.type === "text" ? (msg.text?.body ?? null) : null;
-
-    const threadHistory = bodyText
-      ? await this.prisma.message.findMany({
-          where: { sessionId: conversation.id, body: { not: null } },
-          orderBy: { createdAt: "desc" },
-          take: 12,
-        })
-      : [];
-
-    const formattedHistory = threadHistory
-      .reverse()
-      .map((m) => ({
-        role: (m.direction === MessageDirection.inbound ? "user" : "assistant") as "user" | "assistant",
-        content: m.body!,
-      }));
-
-    try {
-      await this.prisma.message.create({
-        data: {
-          customerId: customer.id,
-          sessionId: conversation.id,
-          whatsappMessageId: wamid,
-          direction: MessageDirection.inbound,
-          body: bodyText,
-          raw: msg as Prisma.InputJsonValue,
-        },
-      });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-        this.logger.debug(`Caught race-condition duplicate via unique constraint: wamid=${wamid}`);
-        return;
-      }
-      throw error;
-    }
-
-    await this.conversations.touch(conversation.id);
-    this.logger.log(`Inbound [${whatsappNumber}]: ${bodyText ?? `[${msg.type}]`}`);
-
-    const handoff = await this.prisma.conversations.findUnique({
-      where: { customer_id: customer.id },
-      select: { mode: true, assigned_admin_id: true },
-    });
-    if (handoff?.mode === "human") {
-      this.logger.log(
-        `Handoff active for ${whatsappNumber} (admin=${handoff.assigned_admin_id ?? "unassigned"}) — skipping bot reply`,
-      );
-      return;
-    }
-
-    if (msg.type === "audio") {
-      await this.sendAndLog(
-        customer.id,
-        conversation.id,
-        whatsappNumber,
-        `Sorry oh, I can't listen to voice notes yet 🎙️ — just type your message and we go run am sharp-sharp! Reply *MENU* for options.`,
-      );
-      return;
-    }
-
-    const pendingItems = await this.conversations.getPendingItems(conversation.id);
-    if (pendingItems.length > 0 && bodyText) {
-      const handled = await this.handleQuantityResponse(
-        customer.id,
-        conversation.id,
-        whatsappNumber,
-        bodyText,
-        pendingItems,
-      );
-      if (handled) {
-        await this.conversations.touch(conversation.id);
-        return;
-      }
-    }
-
-    if (bodyText && looksLikeAddress(bodyText)) {
-      const addressHandled = await this.handleAddressInput(
-        customer.id,
-        conversation.id,
-        whatsappNumber,
-        bodyText,
-      );
-      if (addressHandled) {
-        await this.conversations.touch(conversation.id);
-        return;
-      }
-    }
-
-    // ===== FIXED: Check for order intent BEFORE welcome =====
-    if (bodyText && looksLikeOrderIntent(bodyText)) {
-      await this.processOrderMessage(
-        customer.id,
-        conversation.id,
-        whatsappNumber,
-        bodyText,
-        formattedHistory,
-        customer.contextSummary,
-      );
-      return;
-    }
-
-    const replyKey = this.resolveReplyKey(bodyText, isNewCustomer);
-
-    if (replyKey === "order_prompt") {
-      await this.prisma.pendingOrder.upsert({
-        where: { phone: whatsappNumber },
-        create: { phone: whatsappNumber, completed: false },
-        update: { startedAt: new Date(), completed: false, remindedAt: null },
-      });
-    }
-
-    if (replyKey === "default" && bodyText) {
-      await this.processOrderMessage(
-        customer.id,
-        conversation.id,
-        whatsappNumber,
-        bodyText,
-        formattedHistory,
-        customer.contextSummary,
-      );
-      return;
-    }
-
-    const botResponse = await this.prisma.botResponse.findUnique({
-      where: { key: replyKey },
-    });
-
-    let staticMessageBody =
-      botResponse?.body ??
-      `Aba! 👋 Welcome to OjaRun market service. Drop your list here make we run your market errands for Ibadan sharp-sharp!`;
-
-    staticMessageBody = customer.name
-      ? staticMessageBody.replace(/\{\{name\}\}/g, customer.name)
-      : staticMessageBody.replace(/,?\s*\{\{name\}\}/g, "");
-
-    if (replyKey === "order_prompt") {
-      const { window, day } = getDeliveryWindow();
-      staticMessageBody += `\n\n📦 Delivery window for orders now is *${window} ${day}*.`;
-    }
-
-    await this.sendAndLog(customer.id, conversation.id, whatsappNumber, staticMessageBody);
+  const existing = await this.prisma.message.findUnique({
+    where: { whatsappMessageId: wamid },
+  });
+  if (existing) {
+    this.logger.debug(`Skipping duplicate message wamid=${wamid}`);
+    return;
   }
+
+  const whatsappNumber = from.startsWith("+") ? from : `+${from}`;
+  const profileName = contacts.find((c) => c.wa_id === from)?.profile?.name;
+
+  const existingCustomer = await this.prisma.customer.findUnique({ where: { whatsappNumber } });
+  const isNewCustomer = !existingCustomer;
+
+  const customer = await this.prisma.customer.upsert({
+    where: { whatsappNumber },
+    create: { whatsappNumber, name: profileName ?? null },
+    update: profileName ? { name: profileName } : {},
+  });
+
+  const conversation = await this.conversations.getOrCreateActive(customer.id);
+  const bodyText = msg.type === "text" ? (msg.text?.body ?? null) : null;
+
+  // ===== FIX: Handle multi-line messages with proper TypeScript typing =====
+  let processedText = bodyText;
+  if (bodyText && bodyText.includes('\n')) {
+    const lines = bodyText.split('\n').filter((line: string) => line.trim());
+    processedText = lines.join(' ');
+    this.logger.log(`📝 Multi-line message detected (${lines.length} lines): ${processedText}`);
+  }
+
+  const threadHistory = processedText
+    ? await this.prisma.message.findMany({
+        where: { sessionId: conversation.id, body: { not: null } },
+        orderBy: { createdAt: "desc" },
+        take: 12,
+      })
+    : [];
+
+  const formattedHistory = threadHistory
+    .reverse()
+    .map((m) => ({
+      role: (m.direction === MessageDirection.inbound ? "user" : "assistant") as "user" | "assistant",
+      content: m.body!,
+    }));
+
+  try {
+    await this.prisma.message.create({
+      data: {
+        customerId: customer.id,
+        sessionId: conversation.id,
+        whatsappMessageId: wamid,
+        direction: MessageDirection.inbound,
+        body: processedText,
+        raw: msg as Prisma.InputJsonValue,
+      },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      this.logger.debug(`Caught race-condition duplicate via unique constraint: wamid=${wamid}`);
+      return;
+    }
+    throw error;
+  }
+
+  await this.conversations.touch(conversation.id);
+  this.logger.log(`Inbound [${whatsappNumber}]: ${processedText ?? `[${msg.type}]`}`);
+
+  const handoff = await this.prisma.conversations.findUnique({
+    where: { customer_id: customer.id },
+    select: { mode: true, assigned_admin_id: true },
+  });
+  if (handoff?.mode === "human") {
+    this.logger.log(
+      `Handoff active for ${whatsappNumber} (admin=${handoff.assigned_admin_id ?? "unassigned"}) — skipping bot reply`,
+    );
+    return;
+  }
+
+  if (msg.type === "audio") {
+    await this.sendAndLog(
+      customer.id,
+      conversation.id,
+      whatsappNumber,
+      `Sorry oh, I can't listen to voice notes yet 🎙️ — just type your message and we go run am sharp-sharp! Reply *MENU* for options.`,
+    );
+    return;
+  }
+
+  const pendingItems = await this.conversations.getPendingItems(conversation.id);
+  if (pendingItems.length > 0 && processedText) {
+    const handled = await this.handleQuantityResponse(
+      customer.id,
+      conversation.id,
+      whatsappNumber,
+      processedText,
+      pendingItems,
+    );
+    if (handled) {
+      await this.conversations.touch(conversation.id);
+      return;
+    }
+  }
+
+  if (processedText && looksLikeAddress(processedText)) {
+    const addressHandled = await this.handleAddressInput(
+      customer.id,
+      conversation.id,
+      whatsappNumber,
+      processedText,
+    );
+    if (addressHandled) {
+      await this.conversations.touch(conversation.id);
+      return;
+    }
+  }
+
+  if (processedText && looksLikeOrderIntent(processedText)) {
+    await this.processOrderMessage(
+      customer.id,
+      conversation.id,
+      whatsappNumber,
+      processedText,
+      formattedHistory,
+      customer.contextSummary,
+    );
+    return;
+  }
+
+  const replyKey = this.resolveReplyKey(processedText, isNewCustomer);
+
+  if (replyKey === "order_prompt") {
+    await this.prisma.pendingOrder.upsert({
+      where: { phone: whatsappNumber },
+      create: { phone: whatsappNumber, completed: false },
+      update: { startedAt: new Date(), completed: false, remindedAt: null },
+    });
+  }
+
+  if (replyKey === "default" && processedText) {
+    await this.processOrderMessage(
+      customer.id,
+      conversation.id,
+      whatsappNumber,
+      processedText,
+      formattedHistory,
+      customer.contextSummary,
+    );
+    return;
+  }
+
+  const botResponse = await this.prisma.botResponse.findUnique({
+    where: { key: replyKey },
+  });
+
+  let staticMessageBody =
+    botResponse?.body ??
+    `Aba! 👋 Welcome to OjaRun market service. Drop your list here make we run your market errands for Ibadan sharp-sharp!`;
+
+  staticMessageBody = customer.name
+    ? staticMessageBody.replace(/\{\{name\}\}/g, customer.name)
+    : staticMessageBody.replace(/,?\s*\{\{name\}\}/g, "");
+
+  if (replyKey === "order_prompt") {
+    const { window, day } = getDeliveryWindow();
+    staticMessageBody += `\n\n📦 Delivery window for orders now is *${window} ${day}*.`;
+  }
+
+  await this.sendAndLog(customer.id, conversation.id, whatsappNumber, staticMessageBody);
+}
 
   // ===== Process order messages =====
   private async processOrderMessage(
@@ -583,7 +592,6 @@ export class WebhooksController {
     const allPriced = pricedItems.every((item) => item.unitPrice > 0);
     const paystackRef = `oja_${randomBytes(8).toString("hex")}`;
 
-    // ===== FIXED: Get customer with proper null handling =====
     const customer = await this.prisma.customer.findUnique({
       where: { id: customerId },
       select: { name: true },
@@ -633,22 +641,20 @@ export class WebhooksController {
 
     this.logger.log(`Order processed transactionally for ${whatsappNumber}`);
 
-    // ===== FIXED: Send email with proper types =====
     try {
       await this.email.sendNewOrderNotification({
         orderId: createdOrder.id,
-        customerName: customer?.name ?? null, // 👈 Convert undefined to null
+        customerName: customer?.name ?? null,
         whatsappNumber: whatsappNumber,
         items: draft.items.map(item => ({
           name: item.name,
           quantity: item.quantity,
           unit: item.unit,
         })),
-        deliveryAddress: finalAddress ?? null, // 👈 Convert undefined to null
+        deliveryAddress: finalAddress ?? null,
         createdAt: createdOrder.createdAt,
       });
     } catch (emailError) {
-      // Don't let email failure break the order flow
       this.logger.error(`Failed to send order notification email for order ${createdOrder.id}`, emailError);
     }
 
@@ -1161,7 +1167,7 @@ export class WebhooksController {
     }
   }
 
-  // ===== FIXED: resolveReplyKey checks order intent first =====
+  // ===== resolveReplyKey checks order intent first =====
   private resolveReplyKey(body: string | null, isNewCustomer: boolean): string {
     if (!body) {
       if (isNewCustomer) return "welcome";
