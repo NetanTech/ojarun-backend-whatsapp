@@ -4,6 +4,100 @@ export type BudgetDraftItem = {
   unit: string;
 };
 
+// Common market items (used for merging multi-word items)
+const COMMON_ITEMS = new Set([
+  'beans', 'garri', 'pepper', 'titus', 'yam', 'plantain', 'corn',
+  'rice', 'flour', 'sugar', 'salt', 'maggi', 'tomato', 'onion',
+  'potato', 'kote', 'kot', 'irish potato', 'sweet potato',
+  'fish', 'chicken', 'beef', 'goat', 'egg', 'milk', 'butter',
+  'oil', 'groundnut', 'palm oil', 'vegetable oil', 'spaghetti',
+  'noodles', 'indomie', 'crayfish', 'dry fish', 'stock fish',
+  'okra', 'spinach', 'ugwu', 'waterleaf', 'cabbage', 'carrot',
+  'garlic', 'ginger', 'thyme', 'curry', 'pepper soup', 'pomo',
+  'shaki', 'roundabout', 'beef tripe', 'cow foot', 'goat head',
+  'cocoyam', 'watermelon', 'pawpaw', 'pineapple', 'banana',
+  'orange', 'apple', 'grape', 'mango', 'avocado', 'coconut',
+  'live chicken', 'ofada rice', 'irish potato', 'sweet potato',
+  'palm oil', 'vegetable oil', 'pepper soup', 'beef tripe',
+  'cow foot', 'goat head', 'dry fish', 'stock fish',
+  'coconut oil', 'groundnut oil', 'brown beans', 'white beans',
+  'honey beans', 'oloyin beans', 'plantain chips'
+]);
+
+/**
+ * Extract plain item names from a message (no money amounts)
+ * e.g. "beans Fish Corn Live chicken Yam Ofada rice" → ["beans", "fish", "corn", "live chicken", "yam", "ofada rice"]
+ */
+export function extractPlainItemNames(message: string): string[] {
+  if (!message || message.trim().length < 2) return [];
+  
+  // Remove common filler words and punctuation
+  const cleaned = message
+    .replace(/\b(i want|i need|buy|get|order|please|abeg|and|with|also|plus|from|market|pls|can i get|i would like)\b/gi, ' ')
+    .replace(/[.,!?'"()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  
+  if (!cleaned) return [];
+
+  // Split by commas, "and", newlines, or multiple spaces
+  let parts = cleaned.split(/[,;]|\band\b|\n+/).flatMap(p => p.trim().split(/\s{2,}/)).filter(p => p.length > 0);
+  
+  // If only one part with spaces, split by spaces
+  if (parts.length === 1 && parts[0].includes(' ')) {
+    parts = parts[0].split(/\s+/).filter(p => p.length > 1);
+  }
+
+  // Remove stop words
+  const stopWords = new Set(['of', 'the', 'a', 'an', 'for', 'to', 'with', 'and', 'or', 'but', 'so']);
+  let tokens = parts
+    .map(p => p.trim().toLowerCase())
+    .filter(p => p.length > 1 && !stopWords.has(p));
+
+  if (tokens.length === 0) return [];
+
+  // Merge tokens into known multi-word items
+  const merged: string[] = [];
+  let i = 0;
+  while (i < tokens.length) {
+    let found = false;
+    // Try to combine with next token(s) to form a known item (up to 3 words)
+    for (let j = Math.min(tokens.length - i, 3); j >= 2; j--) {
+      const candidate = tokens.slice(i, i + j).join(' ');
+      if (COMMON_ITEMS.has(candidate)) {
+        merged.push(candidate);
+        i += j;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      // Check if this token is a known item by itself
+      if (COMMON_ITEMS.has(tokens[i])) {
+        merged.push(tokens[i]);
+      } else {
+        // Try to clean the token (remove common suffixes)
+        const cleanToken = tokens[i].replace(/s$/, ''); // remove plural 's'
+        if (COMMON_ITEMS.has(cleanToken)) {
+          merged.push(cleanToken);
+        } else {
+          merged.push(tokens[i]);
+        }
+      }
+      i++;
+    }
+  }
+
+  // Remove duplicates
+  const seen = new Set<string>();
+  return merged.filter(item => {
+    const key = item.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /**
  * Parse customer budget amounts from draft unit/name text.
  * Examples: "N2000 worth", "₦5k", "5000 naira", "2 thousand"
@@ -143,30 +237,11 @@ export function applyBudgetHintsFromMessage(
 
 function cleanItemName(raw: string): string {
   const stop = new Set([
-    'add',
-    'buy',
-    'get',
-    'want',
-    'wanna',
-    'need',
-    'please',
-    'abeg',
-    'and',
-    'with',
-    'also',
-    'plus',
-    'of',
-    'some',
-    'the',
-    'a',
-    'an',
-    'my',
-    'order',
-    'for',
-    'thousand',
-    'naira',
-    'ngn',
-    'worth',
+    'add', 'buy', 'get', 'want', 'wanna', 'need', 'please', 'abeg',
+    'and', 'with', 'also', 'plus', 'of', 'some', 'the', 'a', 'an',
+    'my', 'order', 'for', 'thousand', 'naira', 'ngn', 'worth',
+    'i', 'you', 'me', 'can', 'will', 'would', 'like', 'am', 'is',
+    'are', 'was', 'were', 'have', 'has', 'had', 'do', 'does', 'did'
   ]);
   const parts = raw
     .trim()
