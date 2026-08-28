@@ -18,12 +18,17 @@ model Admin {
   status          AdminStatus   @default(active)
   avatarUrl       String?       @map("avatar_url")
   lastActiveAt    DateTime?     @map("last_active_at") @db.Timestamptz(6)
+  isActive       Boolean           @default(true)
+    isOnDuty       Boolean           @default(true)   
+  whatsappNumber String?          
+  specialty     Specialty?         
   inviteTokenHash String?       @map("invite_token_hash")
   inviteMessage   String?       @map("invite_message")
   invitedById     String?       @map("invited_by_id") @db.Uuid
   createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
   conversations   conversations[]
+  assignments   OrderAssignment[]
 
   @@index([status])
   @@map("admins")
@@ -87,12 +92,39 @@ model Order {
   createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
   items             OrderItem[]
+  assignments   OrderAssignment[]
   customer          Customer      @relation(fields: [customerId], references: [id])
 
   @@index([customerId])
   @@index([status])
   @@index([paymentStatus])
   @@map("orders")
+}
+
+// Add this model after the Order model
+model OrderAssignment {
+  id          String            @id @default(uuid()) @db.Uuid
+  orderId     String            @map("order_id") @db.Uuid
+  adminId     String            @map("admin_id") @db.Uuid
+  assignedAt  DateTime          @default(now()) @map("assigned_at") @db.Timestamptz(6)
+  completedAt DateTime?         @map("completed_at") @db.Timestamptz(6)
+  notes       String?
+  status      AssignmentStatus  @default(pending)
+
+  order       Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  admin       Admin             @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([adminId])
+  @@map("order_assignments")
+}
+
+enum AssignmentStatus {
+  pending
+  accepted
+  in_progress
+  completed
+  rejected
 }
 
 model OrderItem {
@@ -228,6 +260,14 @@ enum AdminRole {
   agent
   customer_care
   customer_support
+}
+
+// 👇 ADD THIS
+enum Specialty {
+  shopping
+  delivery
+  customer_support
+  management
 }
 
 enum AdminStatus {

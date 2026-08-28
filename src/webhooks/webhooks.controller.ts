@@ -25,11 +25,12 @@ import { ConversationService } from "./conversation.service";
 import { EmailService } from "../email/email.service";
 import { PaystackService } from "../paystack/paystack.service";
 import { AddressValidationService } from "./address-validation.service";
+import { AdminNotificationService } from "../admins/admin-notification.service";
 import {
   parseBudgetNaira,
   applyBudgetHintsFromMessage,
   extractBudgetItemsFromMessage,
-  extractPlainItemNames, // 👈 ADD THIS
+  extractPlainItemNames,
 } from "./budget.util";
 import { matchCatalogProduct } from "./product-match.util";
 import { randomBytes } from "crypto";
@@ -60,13 +61,19 @@ const CONFIRM_PHRASES = new Set([
 ]);
 
 function normalizeForConfirmCheck(text: string): string {
-  return text.trim().toUpperCase().replace(/[.,!?'’]/g, "");
+  return text
+    .trim()
+    .toUpperCase()
+    .replace(/[.,!?'’]/g, "");
 }
 
 function looksLikeCartRequest(text: string): boolean {
   const t = text.trim().toLowerCase().replace(/[?.!]/g, "");
   if (/^(my\s+)?(cart|order|orders|list)$/.test(t)) return true;
-  if (/^(show|see|view|wetin|what's|whats)\b/.test(t) && /\b(cart|order|orders|list)\b/.test(t)) {
+  if (
+    /^(show|see|view|wetin|what's|whats)\b/.test(t) &&
+    /\b(cart|order|orders|list)\b/.test(t)
+  ) {
     return true;
   }
   return (
@@ -77,50 +84,122 @@ function looksLikeCartRequest(text: string): boolean {
 
 // ===== Expanded market items list =====
 const MARKET_ITEMS = [
-  'beans', 'garri', 'pepper', 'titus', 'yam', 'plantain', 'corn',
-  'rice', 'flour', 'sugar', 'salt', 'maggi', 'tomato', 'onion',
-  'potato', 'kote', 'kot', 'irish potato', 'sweet potato',
-  'fish', 'chicken', 'beef', 'goat', 'egg', 'milk', 'butter',
-  'oil', 'groundnut', 'palm oil', 'vegetable oil', 'spaghetti',
-  'noodles', 'indomie', 'crayfish', 'dry fish', 'stock fish',
-  'okra', 'spinach', 'ugwu', 'waterleaf', 'cabbage', 'carrot',
-  'garlic', 'ginger', 'thyme', 'curry', 'pepper soup', 'pomo',
-  'shaki', 'roundabout', 'beef tripe', 'cow foot', 'goat head',
-  'cocoyam', 'watermelon', 'pawpaw', 'pineapple', 'banana',
-  'orange', 'apple', 'grape', 'mango', 'avocado', 'coconut',
-  'live chicken', 'ofada rice', 'irish potato', 'sweet potato',
-  'palm oil', 'vegetable oil', 'pepper soup', 'beef tripe',
-  'cow foot', 'goat head', 'dry fish', 'stock fish'
+  "beans",
+  "garri",
+  "pepper",
+  "titus",
+  "yam",
+  "plantain",
+  "corn",
+  "rice",
+  "flour",
+  "sugar",
+  "salt",
+  "maggi",
+  "tomato",
+  "onion",
+  "potato",
+  "kote",
+  "kot",
+  "irish potato",
+  "sweet potato",
+  "fish",
+  "chicken",
+  "beef",
+  "goat",
+  "egg",
+  "milk",
+  "butter",
+  "oil",
+  "groundnut",
+  "palm oil",
+  "vegetable oil",
+  "spaghetti",
+  "noodles",
+  "indomie",
+  "crayfish",
+  "dry fish",
+  "stock fish",
+  "okra",
+  "spinach",
+  "ugwu",
+  "waterleaf",
+  "cabbage",
+  "carrot",
+  "garlic",
+  "ginger",
+  "thyme",
+  "curry",
+  "pepper soup",
+  "pomo",
+  "shaki",
+  "roundabout",
+  "beef tripe",
+  "cow foot",
+  "goat head",
+  "cocoyam",
+  "watermelon",
+  "pawpaw",
+  "pineapple",
+  "banana",
+  "orange",
+  "apple",
+  "grape",
+  "mango",
+  "avocado",
+  "coconut",
+  "live chicken",
+  "ofada rice",
+  "irish potato",
+  "sweet potato",
+  "palm oil",
+  "vegetable oil",
+  "pepper soup",
+  "beef tripe",
+  "cow foot",
+  "goat head",
+  "dry fish",
+  "stock fish",
 ];
 
 /** First message already contains a shopping request — don't bury it under welcome. */
 function looksLikeOrderIntent(text: string): boolean {
   if (!text) return false;
-  
+
   // ===== FIX: Combine multi-line text with proper typing =====
-  const t: string = text.trim().toLowerCase().replace(/\n/g, ' ');
-  
+  const t: string = text.trim().toLowerCase().replace(/\n/g, " ");
+
   // Check if any market item is mentioned
   const hasMarketItem = MARKET_ITEMS.some((item: string) => t.includes(item));
   if (hasMarketItem) return true;
-  
+
   // Check for numbers with items (e.g., "2kg rice", "3 tubers yam")
-  const hasNumberWithItem: boolean = /\b(\d+)\s*(?:kg|kilo|bag|bottle|pack|cups?|pieces?|tuber|tubers|congo|tray|trays)\s+\w+/i.test(t);
+  const hasNumberWithItem: boolean =
+    /\b(\d+)\s*(?:kg|kilo|bag|bottle|pack|cups?|pieces?|tuber|tubers|congo|tray|trays)\s+\w+/i.test(
+      t,
+    );
   if (hasNumberWithItem) return true;
-  
+
   // Check for money amounts with items (e.g., "rice 2000", "fish 5k")
-  const hasMoneyWithItem: boolean = /\b(\w+)\s+\d+[k]?\b/.test(t) || /\b\d+[k]?\s+\w+\b/.test(t);
+  const hasMoneyWithItem: boolean =
+    /\b(\w+)\s+\d+[k]?\b/.test(t) || /\b\d+[k]?\s+\w+\b/.test(t);
   if (hasMoneyWithItem) return true;
-  
+
   // Check for "I want" patterns without specific items
-  if (/\b(wan|want|buy|get|order|need|i want|i wan|i need|get me|add|bring|send)\b/.test(t)) {
+  if (
+    /\b(wan|want|buy|get|order|need|i want|i wan|i need|get me|add|bring|send)\b/.test(
+      t,
+    )
+  ) {
     if (t.length > 5) return true;
   }
-  
+
   // Original checks
   return (
     /\b(buy|wan\b|want|order|need|get me|add|bring|send)\b/.test(t) ||
-    /\b(\d+\s*k\b|\d+\s*thousand|naira|₦|\bkg\b|\bbag\b|\bkilo\b|\bkilos\b)\b/.test(t)
+    /\b(\d+\s*k\b|\d+\s*thousand|naira|₦|\bkg\b|\bbag\b|\bkilo\b|\bkilos\b)\b/.test(
+      t,
+    )
   );
 }
 
@@ -143,28 +222,71 @@ function looksLikeSameAddressRequest(text: string): boolean {
 function looksLikeAddress(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (t.length < 5) return false;
-  
+
   const addressIndicators = [
-    'ibadan', 'ui', 'gate', 'road', 'street', 'avenue', 
-    'close', 'crescent', 'drive', 'lane', 'way', 'boulevard',
-    'estate', 'village', 'town', 'area', 'junction', 'roundabout',
-    'behind', 'beside', 'near', 'opposite', 'along',
-    'house', 'flat', 'apartment', 'block', 'plot'
+    "ibadan",
+    "ui",
+    "gate",
+    "road",
+    "street",
+    "avenue",
+    "close",
+    "crescent",
+    "drive",
+    "lane",
+    "way",
+    "boulevard",
+    "estate",
+    "village",
+    "town",
+    "area",
+    "junction",
+    "roundabout",
+    "behind",
+    "beside",
+    "near",
+    "opposite",
+    "along",
+    "house",
+    "flat",
+    "apartment",
+    "block",
+    "plot",
   ];
-  
-  const hasIndicator = addressIndicators.some(indicator => t.includes(indicator));
+
+  const hasIndicator = addressIndicators.some((indicator) =>
+    t.includes(indicator),
+  );
   if (hasIndicator) return true;
-  
+
   if (/\d+\s+(road|street|avenue|close|drive|lane)/i.test(t)) return true;
-  
+
   const ibadanAreas = [
-    'bodija', 'soka', 'agodi', 'alaafin', 'apata', 'challenge',
-    'eleyele', 'gbagi', 'jericho', 'mokola', 'monatan', 'ojo',
-    'sabo', 'tanki', 'uch', 'ui', 'university of ibadan',
-    'oyoroad', 'ringroad', 'dugbe', 'oke ado', 'oke aro'
+    "bodija",
+    "soka",
+    "agodi",
+    "alaafin",
+    "apata",
+    "challenge",
+    "eleyele",
+    "gbagi",
+    "jericho",
+    "mokola",
+    "monatan",
+    "ojo",
+    "sabo",
+    "tanki",
+    "uch",
+    "ui",
+    "university of ibadan",
+    "oyoroad",
+    "ringroad",
+    "dugbe",
+    "oke ado",
+    "oke aro",
   ];
-  
-  return ibadanAreas.some(area => t.includes(area));
+
+  return ibadanAreas.some((area) => t.includes(area));
 }
 
 @Controller("webhooks/whatsapp")
@@ -180,6 +302,7 @@ export class WebhooksController {
     private readonly email: EmailService,
     private readonly paystack: PaystackService,
     private readonly addressValidation: AddressValidationService,
+    private readonly adminNotification: AdminNotificationService,
   ) {}
 
   @Get()
@@ -209,7 +332,10 @@ export class WebhooksController {
           try {
             await this.handleInboundMessage(msg, value.contacts ?? []);
           } catch (error) {
-            this.logger.error(`Failed to process inbound message wamid=${msg?.id}`, error as Error);
+            this.logger.error(
+              `Failed to process inbound message wamid=${msg?.id}`,
+              error as Error,
+            );
           }
         }
       }
@@ -235,7 +361,9 @@ export class WebhooksController {
     const whatsappNumber = from.startsWith("+") ? from : `+${from}`;
     const profileName = contacts.find((c) => c.wa_id === from)?.profile?.name;
 
-    const existingCustomer = await this.prisma.customer.findUnique({ where: { whatsappNumber } });
+    const existingCustomer = await this.prisma.customer.findUnique({
+      where: { whatsappNumber },
+    });
     const isNewCustomer = !existingCustomer;
 
     const customer = await this.prisma.customer.upsert({
@@ -244,15 +372,19 @@ export class WebhooksController {
       update: profileName ? { name: profileName } : {},
     });
 
-    const conversation = await this.conversations.getOrCreateActive(customer.id);
+    const conversation = await this.conversations.getOrCreateActive(
+      customer.id,
+    );
     const bodyText = msg.type === "text" ? (msg.text?.body ?? null) : null;
 
     // ===== FIX: Handle multi-line messages with proper TypeScript typing =====
     let processedText = bodyText;
-    if (bodyText && bodyText.includes('\n')) {
-      const lines = bodyText.split('\n').filter((line: string) => line.trim());
-      processedText = lines.join(' ');
-      this.logger.log(`📝 Multi-line message detected (${lines.length} lines): ${processedText}`);
+    if (bodyText && bodyText.includes("\n")) {
+      const lines = bodyText.split("\n").filter((line: string) => line.trim());
+      processedText = lines.join(" ");
+      this.logger.log(
+        `📝 Multi-line message detected (${lines.length} lines): ${processedText}`,
+      );
     }
 
     const threadHistory = processedText
@@ -263,12 +395,12 @@ export class WebhooksController {
         })
       : [];
 
-    const formattedHistory = threadHistory
-      .reverse()
-      .map((m) => ({
-        role: (m.direction === MessageDirection.inbound ? "user" : "assistant") as "user" | "assistant",
-        content: m.body!,
-      }));
+    const formattedHistory = threadHistory.reverse().map((m) => ({
+      role: (m.direction === MessageDirection.inbound
+        ? "user"
+        : "assistant") as "user" | "assistant",
+      content: m.body!,
+    }));
 
     try {
       await this.prisma.message.create({
@@ -282,15 +414,22 @@ export class WebhooksController {
         },
       });
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-        this.logger.debug(`Caught race-condition duplicate via unique constraint: wamid=${wamid}`);
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        this.logger.debug(
+          `Caught race-condition duplicate via unique constraint: wamid=${wamid}`,
+        );
         return;
       }
       throw error;
     }
 
     await this.conversations.touch(conversation.id);
-    this.logger.log(`Inbound [${whatsappNumber}]: ${processedText ?? `[${msg.type}]`}`);
+    this.logger.log(
+      `Inbound [${whatsappNumber}]: ${processedText ?? `[${msg.type}]`}`,
+    );
 
     const handoff = await this.prisma.conversations.findUnique({
       where: { customer_id: customer.id },
@@ -313,7 +452,9 @@ export class WebhooksController {
       return;
     }
 
-    const pendingItems = await this.conversations.getPendingItems(conversation.id);
+    const pendingItems = await this.conversations.getPendingItems(
+      conversation.id,
+    );
     if (pendingItems.length > 0 && processedText) {
       const handled = await this.handleQuantityResponse(
         customer.id,
@@ -392,7 +533,12 @@ export class WebhooksController {
       staticMessageBody += `\n\n📦 Delivery window for orders now is *${window} ${day}*.`;
     }
 
-    await this.sendAndLog(customer.id, conversation.id, whatsappNumber, staticMessageBody);
+    await this.sendAndLog(
+      customer.id,
+      conversation.id,
+      whatsappNumber,
+      staticMessageBody,
+    );
   }
 
   // ===== Process order messages =====
@@ -401,12 +547,13 @@ export class WebhooksController {
     conversationId: string,
     whatsappNumber: string,
     bodyText: string,
-    history: { role: 'user' | 'assistant'; content: string }[],
+    history: { role: "user" | "assistant"; content: string }[],
     customerContext: string | null,
   ): Promise<void> {
     const existingDraft = await this.conversations.getDraft(conversationId);
     const isDeterministicConfirm =
-      CONFIRM_PHRASES.has(normalizeForConfirmCheck(bodyText)) && existingDraft.items.length > 0;
+      CONFIRM_PHRASES.has(normalizeForConfirmCheck(bodyText)) &&
+      existingDraft.items.length > 0;
 
     if (!isDeterministicConfirm && looksLikePayNowRequest(bodyText)) {
       const handled = await this.handlePayNowRequest(
@@ -420,13 +567,14 @@ export class WebhooksController {
     if (!isDeterministicConfirm && looksLikeSameAddressRequest(bodyText)) {
       const lastAddress = await this.getLastDeliveryAddress(customerId);
       if (lastAddress) {
-        const validated = await this.addressValidation.validateAddress(lastAddress);
+        const validated =
+          await this.addressValidation.validateAddress(lastAddress);
         const { items, deliveryAddress } = await this.conversations.mergeDraft(
           conversationId,
           [],
           lastAddress,
         );
-        
+
         let draftSummary = `Noted! Here's your list so far:\n\n`;
         if (items.length === 0) {
           draftSummary += `(No items yet — drop wetin you wan buy.)\n`;
@@ -435,7 +583,7 @@ export class WebhooksController {
             draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
           });
         }
-        
+
         if (validated) {
           draftSummary += `\n📍 *Delivery to:* ${validated.formatted}`;
           if (validated.neighborhood) {
@@ -444,9 +592,14 @@ export class WebhooksController {
         } else {
           draftSummary += `\n📍 *Delivery to:* ${deliveryAddress}`;
         }
-        
+
         draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
-        await this.sendAndLog(customerId, conversationId, whatsappNumber, draftSummary);
+        await this.sendAndLog(
+          customerId,
+          conversationId,
+          whatsappNumber,
+          draftSummary,
+        );
         return;
       }
     }
@@ -469,7 +622,12 @@ export class WebhooksController {
         ? `\n📍 Delivery to: ${existingDraft.deliveryAddress}`
         : `\n⚠️ Still need your delivery address.`;
       cartSummary += `\n\nAdd/remove items anytime, or say *"that's all"* when you're ready.`;
-      await this.sendAndLog(customerId, conversationId, whatsappNumber, cartSummary);
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        cartSummary,
+      );
       return;
     }
 
@@ -481,18 +639,19 @@ export class WebhooksController {
 
     if (resolved?.type === "draft_update") {
       const itemsWithoutQuantities = resolved.items.filter(
-        item => item.quantity <= 0 || (item.unit === 'pieces' && item.quantity === 1)
+        (item) =>
+          item.quantity <= 0 || (item.unit === "pieces" && item.quantity === 1),
       );
 
       if (itemsWithoutQuantities.length > 0 && !resolved.deliveryAddress) {
-        const itemNames = itemsWithoutQuantities.map(item => item.name);
+        const itemNames = itemsWithoutQuantities.map((item) => item.name);
         await this.conversations.setPendingItems(conversationId, itemNames);
-        
+
         await this.sendAndLog(
           customerId,
           conversationId,
           whatsappNumber,
-          `Got it! Let me get the quantities:\n\nHow much *${itemNames[0]}* do you want? (e.g., "2 cups", "1 kg", "N500 worth")`
+          `Got it! Let me get the quantities:\n\nHow much *${itemNames[0]}* do you want? (e.g., "2 cups", "1 kg", "N500 worth")`,
         );
         return;
       }
@@ -512,8 +671,9 @@ export class WebhooksController {
             draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
           });
         }
-        
-        const addressInfo = await this.conversations.getDeliveryAddress(conversationId);
+
+        const addressInfo =
+          await this.conversations.getDeliveryAddress(conversationId);
         if (addressInfo.address) {
           if (addressInfo.formatted) {
             draftSummary += `\n📍 *Delivery to:* ${addressInfo.formatted}`;
@@ -528,20 +688,21 @@ export class WebhooksController {
         } else {
           draftSummary += `\n⚠️ Still need your delivery address — just drop it whenever you're ready.`;
         }
-        
+
         draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
 
-        await this.sendAndLog(customerId, conversationId, whatsappNumber, draftSummary);
+        await this.sendAndLog(
+          customerId,
+          conversationId,
+          whatsappNumber,
+          draftSummary,
+        );
         return;
       }
     }
 
     if (resolved?.type === "confirm_order") {
-      await this.confirmOrder(
-        customerId,
-        conversationId,
-        whatsappNumber,
-      );
+      await this.confirmOrder(customerId, conversationId, whatsappNumber);
       return;
     }
 
@@ -556,7 +717,12 @@ export class WebhooksController {
         );
         return;
       }
-      await this.sendAndLog(customerId, conversationId, whatsappNumber, resolved.content);
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        resolved.content,
+      );
       return;
     }
   }
@@ -568,7 +734,8 @@ export class WebhooksController {
     whatsappNumber: string,
   ): Promise<void> {
     const draft = await this.conversations.getDraft(conversationId);
-    const addressInfo = await this.conversations.getDeliveryAddress(conversationId);
+    const addressInfo =
+      await this.conversations.getDeliveryAddress(conversationId);
 
     if (draft.items.length === 0) {
       await this.sendAndLog(
@@ -590,8 +757,10 @@ export class WebhooksController {
       return;
     }
 
-    const finalAddress = addressInfo.formatted || addressInfo.address || draft.deliveryAddress;
+    const finalAddress =
+      addressInfo.formatted || addressInfo.address || draft.deliveryAddress;
 
+    // ===== PRICE ITEMS =====
     const pricedItems = await this.priceDraftItems(draft.items);
     const totalNaira = pricedItems.reduce(
       (sum, item) => sum + item.lineTotal,
@@ -605,6 +774,7 @@ export class WebhooksController {
       select: { name: true },
     });
 
+    // ===== CREATE ORDER =====
     const createdOrder = await this.prisma.$transaction(async (tx) => {
       await tx.pendingOrder.updateMany({
         where: { phone: whatsappNumber, completed: false },
@@ -639,22 +809,36 @@ export class WebhooksController {
       return order;
     });
 
+    // ===== NOTIFY ADMINS =====
+    try {
+      await this.adminNotification.notifyAdminsOfNewOrder(createdOrder, pricedItems);
+    } catch (error) {
+      this.logger.error('Admin notification failed', error);
+    }
+
+    // ===== CLEANUP =====
     await this.conversations.clearDraft(conversationId);
     await this.conversations.clearPendingItems(conversationId);
     await this.conversations.closeSession(conversationId);
 
     this.conversations
       .summarizeSession(conversationId)
-      .catch((err) => this.logger.error(`Immediate summarization failed for session ${conversationId}`, err));
+      .catch((err) =>
+        this.logger.error(
+          `Immediate summarization failed for session ${conversationId}`,
+          err,
+        ),
+      );
 
     this.logger.log(`Order processed transactionally for ${whatsappNumber}`);
 
+    // ===== SEND EMAIL NOTIFICATION =====
     try {
       await this.email.sendNewOrderNotification({
         orderId: createdOrder.id,
         customerName: customer?.name ?? null,
         whatsappNumber: whatsappNumber,
-        items: draft.items.map(item => ({
+        items: draft.items.map((item) => ({
           name: item.name,
           quantity: item.quantity,
           unit: item.unit,
@@ -663,15 +847,19 @@ export class WebhooksController {
         createdAt: createdOrder.createdAt,
       });
     } catch (emailError) {
-      this.logger.error(`Failed to send order notification email for order ${createdOrder.id}`, emailError);
+      this.logger.error(
+        `Failed to send order notification email for order ${createdOrder.id}`,
+        emailError,
+      );
     }
 
+    // ===== SEND INVOICE TO CUSTOMER =====
     const { window, day } = getDeliveryWindow();
     let customerInvoiceReceipt = `E don set! 🔥 I have compiled your OjaRun market order list:\n\n`;
     pricedItems.forEach((item) => {
       const priceBit =
         item.unitPrice > 0
-          ? ` — ₦${(item.lineTotal).toLocaleString("en-NG")}`
+          ? ` — ₦${item.lineTotal.toLocaleString("en-NG")}`
           : "";
       customerInvoiceReceipt += `🔸 *${item.name}* — ${item.quantity} ${item.unit}${priceBit}\n`;
     });
@@ -736,14 +924,21 @@ export class WebhooksController {
         customerInvoiceReceipt += `\n\nPayment link no gree open just now — our team go send am sharp-sharp. 🙏`;
       }
     } else {
-      const unpriced = pricedItems.filter((i) => i.unitPrice <= 0).map((i) => i.name);
+      const unpriced = pricedItems
+        .filter((i) => i.unitPrice <= 0)
+        .map((i) => i.name);
       this.logger.warn(
         `Order ${createdOrder.id}: no payment link — allPriced=${allPriced} total=₦${totalNaira} paystack=${this.paystack.isConfigured()} unpriced=[${unpriced.join(", ")}]`,
       );
       customerInvoiceReceipt += `\n\nOur market shoppers are handling it. We will send over your subtotal breakdown once pricing finishes! 🙏`;
     }
 
-    await this.sendAndLog(customerId, conversationId, whatsappNumber, customerInvoiceReceipt);
+    await this.sendAndLog(
+      customerId,
+      conversationId,
+      whatsappNumber,
+      customerInvoiceReceipt,
+    );
   }
 
   // ===== Handle address input =====
@@ -753,10 +948,16 @@ export class WebhooksController {
     whatsappNumber: string,
     bodyText: string,
   ): Promise<boolean> {
-    const result = await this.addressValidation.validateAndFormatResponse(bodyText);
+    const result =
+      await this.addressValidation.validateAndFormatResponse(bodyText);
 
     if (!result.valid) {
-      await this.sendAndLog(customerId, conversationId, whatsappNumber, result.message);
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        result.message,
+      );
       return true;
     }
 
@@ -768,14 +969,15 @@ export class WebhooksController {
           formatted: result.validatedAddress.formatted,
           neighborhood: result.validatedAddress.neighborhood,
           landmark: result.validatedAddress.landmark,
-        }
+        },
       );
 
       const draft = await this.conversations.getDraft(conversationId);
-      const addressInfo = await this.conversations.getDeliveryAddress(conversationId);
-      
+      const addressInfo =
+        await this.conversations.getDeliveryAddress(conversationId);
+
       let draftSummary = `Noted! Here's your list so far:\n\n`;
-      
+
       if (draft.items.length === 0) {
         draftSummary += `(No items yet — drop wetin you wan buy.)\n`;
       } else {
@@ -783,16 +985,21 @@ export class WebhooksController {
           draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
         });
       }
-      
+
       draftSummary += `\n📍 *Delivery to:* ${addressInfo.formatted || addressInfo.address}`;
-      
+
       if (addressInfo.neighborhood) {
         draftSummary += `\n📍 *Area:* ${addressInfo.neighborhood}`;
       }
-      
+
       draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
 
-      await this.sendAndLog(customerId, conversationId, whatsappNumber, draftSummary);
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        draftSummary,
+      );
       return true;
     }
 
@@ -808,13 +1015,13 @@ export class WebhooksController {
     pendingItems: string[],
   ): Promise<boolean> {
     const quantity = this.conversations.parseQuantity(bodyText);
-    
+
     if (!quantity) {
       await this.sendAndLog(
         customerId,
         conversationId,
         whatsappNumber,
-        `Sorry, I no catch that 🙏 — please tell me how much *${pendingItems[0]}* you want (e.g., "2 cups", "1 kg", "N500 worth")`
+        `Sorry, I no catch that 🙏 — please tell me how much *${pendingItems[0]}* you want (e.g., "2 cups", "1 kg", "N500 worth")`,
       );
       return true;
     }
@@ -823,7 +1030,7 @@ export class WebhooksController {
     await this.conversations.mergeDraft(
       conversationId,
       [{ name: currentItem, quantity: quantity.value, unit: quantity.unit }],
-      null
+      null,
     );
 
     pendingItems.shift();
@@ -834,17 +1041,18 @@ export class WebhooksController {
         customerId,
         conversationId,
         whatsappNumber,
-        `Great! ✅ ${quantity.value} ${quantity.unit} of ${currentItem} added.\n\nHow much *${pendingItems[0]}* do you want? (e.g., "2 cups", "1 kg", "N500 worth")`
+        `Great! ✅ ${quantity.value} ${quantity.unit} of ${currentItem} added.\n\nHow much *${pendingItems[0]}* do you want? (e.g., "2 cups", "1 kg", "N500 worth")`,
       );
     } else {
       const draft = await this.conversations.getDraft(conversationId);
-      const addressInfo = await this.conversations.getDeliveryAddress(conversationId);
-      
+      const addressInfo =
+        await this.conversations.getDeliveryAddress(conversationId);
+
       let summary = `Noted! Here's your list so far:\n\n`;
       draft.items.forEach((item) => {
         summary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
       });
-      
+
       if (addressInfo.address) {
         summary += `\n📍 *Delivery to:* ${addressInfo.formatted || addressInfo.address}`;
         if (addressInfo.neighborhood) {
@@ -853,10 +1061,15 @@ export class WebhooksController {
       } else {
         summary += `\n📍 Still need your delivery address — just drop it whenever you're ready.`;
       }
-      
+
       summary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
-      
-      await this.sendAndLog(customerId, conversationId, whatsappNumber, summary);
+
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        summary,
+      );
     }
 
     return true;
@@ -908,12 +1121,12 @@ export class WebhooksController {
     const plainItems = extractPlainItemNames(bodyText);
     if (plainItems.length > 0) {
       this.logger.warn(
-        `No budget items found, extracted ${plainItems.length} plain item(s) from message: ${plainItems.join(', ')}`,
+        `No budget items found, extracted ${plainItems.length} plain item(s) from message: ${plainItems.join(", ")}`,
       );
-      const draftItems = plainItems.map(name => ({
+      const draftItems = plainItems.map((name) => ({
         name: name.charAt(0).toUpperCase() + name.slice(1), // Capitalize
         quantity: 1,
-        unit: 'pieces',
+        unit: "pieces",
       }));
       return {
         type: "draft_update",
@@ -973,7 +1186,9 @@ export class WebhooksController {
     });
   }
 
-  private async getLastDeliveryAddress(customerId: string): Promise<string | null> {
+  private async getLastDeliveryAddress(
+    customerId: string,
+  ): Promise<string | null> {
     const last = await this.prisma.order.findFirst({
       where: { customerId, customerNotes: { not: null } },
       orderBy: { createdAt: "desc" },
@@ -1016,7 +1231,11 @@ export class WebhooksController {
     if (totalNaira < 1 || !paymentUrl) {
       const repriced = await this.repriceOrderItems(order.id, order.items);
       displayTotal = repriced.total;
-      if (displayTotal >= 1 && this.paystack.isConfigured() && order.paystackReference) {
+      if (
+        displayTotal >= 1 &&
+        this.paystack.isConfigured() &&
+        order.paystackReference
+      ) {
         const payEmail = `${whatsappNumber.replace(/\D/g, "")}@whatsapp.ojarun.ng`;
         const webAppUrl = this.config.get<string>("webAppUrl") || "";
         let reference = order.paystackReference;
@@ -1156,7 +1375,10 @@ export class WebhooksController {
       });
       await this.conversations.touch(conversationId);
     } catch (error) {
-      this.logger.error(`Failed to send/log outbound message to ${whatsappNumber}`, error as Error);
+      this.logger.error(
+        `Failed to send/log outbound message to ${whatsappNumber}`,
+        error as Error,
+      );
     }
   }
 
@@ -1199,25 +1421,31 @@ export class WebhooksController {
       if (isNewCustomer) return "welcome";
       return "default";
     }
-    
+
     const text = body.trim().toUpperCase();
-    
+
     // Check for order intent FIRST - this is the key fix
     if (looksLikeOrderIntent(body)) {
       return "default";
     }
-    
+
     // Then check for new customer welcome
     if (isNewCustomer) {
       return "welcome";
     }
-    
+
     // Existing customer keywords
     if (text === "MENU" || text.includes("WETIN DEY")) return "menu";
-    if (text === "ORDER" || text === "I WANT TO BUY" || text === "I WAN BUY") return "order_prompt";
+    if (text === "ORDER" || text === "I WANT TO BUY" || text === "I WAN BUY")
+      return "order_prompt";
     if (text === "HELP") return "help";
     if (text.includes("LOCATION") || text.includes("IBADAN")) return "location";
-    if (text.includes("PRICE") || text.includes("HOW MUCH") || text.includes("₦")) return "pricing";
+    if (
+      text.includes("PRICE") ||
+      text.includes("HOW MUCH") ||
+      text.includes("₦")
+    )
+      return "pricing";
 
     return "default";
   }
