@@ -61,10 +61,7 @@ const CONFIRM_PHRASES = new Set([
 ]);
 
 function normalizeForConfirmCheck(text: string): string {
-  return text
-    .trim()
-    .toUpperCase()
-    .replace(/[.,!?'’]/g, "");
+  return text.trim().toUpperCase().replace(/[.,!?'’]/g, "");
 }
 
 function looksLikeCartRequest(text: string): boolean {
@@ -161,6 +158,23 @@ const MARKET_ITEMS = [
   "dry fish",
   "stock fish",
 ];
+
+/**
+ * Check if the message is just a greeting (not an order).
+ */
+function looksLikeGreeting(text: string): boolean {
+  if (!text) return false;
+  const t = text.trim().toLowerCase();
+  const greetings = [
+    'hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening',
+    'how are you', 'howdy', 'yo', 'sup', 'what\'s up', 'wassup',
+    'morning', 'afternoon', 'evening', 'night'
+  ];
+  // Exact match or message consists only of greeting words
+  const words = t.split(/\s+/);
+  if (words.length > 3) return false; // too long to be just a greeting
+  return greetings.some(g => t === g || t.includes(g) && words.length <= 2);
+}
 
 /** First message already contains a shopping request — don't bury it under welcome. */
 function looksLikeOrderIntent(text: string): boolean {
@@ -467,6 +481,20 @@ export class WebhooksController {
         await this.conversations.touch(conversation.id);
         return;
       }
+    }
+
+    // ===== NEW: Check for greeting =====
+    if (processedText && looksLikeGreeting(processedText)) {
+      const greetings = [
+        `Aba! 👋 Welcome to OjaRun! I dey here sharp-sharp to run your market errands for Ibadan. Drop your shopping list or tell me wetin you wan buy today! 🛍️`,
+        `How far! 👋 OjaRun dey here for you. Tell me wetin you wan buy from market today make we go help you buy am sharp-sharp! 🍅`,
+        `Oya let's go! 🚀 Welcome to OjaRun. Wetin we dey buy from Ibadan market today? Just drop the list make I arrange am for you.`,
+        `Aba, how body? 👋 OjaRun service active! Drop your market list here make we run the errand for you sharp-sharp! 🛒`,
+      ];
+      const randomIndex = Math.floor(Math.random() * greetings.length);
+      await this.sendAndLog(customer.id, conversation.id, whatsappNumber, greetings[randomIndex]);
+      await this.conversations.touch(conversation.id);
+      return;
     }
 
     if (processedText && looksLikeAddress(processedText)) {
