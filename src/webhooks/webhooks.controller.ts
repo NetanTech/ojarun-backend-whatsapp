@@ -173,7 +173,7 @@ function looksLikeGreeting(text: string): boolean {
   // Exact match or message consists only of greeting words
   const words = t.split(/\s+/);
   if (words.length > 3) return false; // too long to be just a greeting
-  return greetings.some(g => t === g || t.includes(g) && words.length <= 2);
+  return greetings.some(g => t === g || (t.includes(g) && words.length <= 2));
 }
 
 /** First message already contains a shopping request — don't bury it under welcome. */
@@ -232,75 +232,55 @@ function looksLikeSameAddressRequest(text: string): boolean {
   return /\bsame\s+(address|location|place|delivery)\b/i.test(text);
 }
 
-// ===== Check if message looks like an address =====
+// ===== Improved: Check if message looks like an address =====
 function looksLikeAddress(text: string): boolean {
+  if (!text) return false;
   const t = text.trim().toLowerCase();
-  if (t.length < 5) return false;
+  
+  // Must be at least 3 characters
+  if (t.length < 3) return false;
 
-  const addressIndicators = [
-    "ibadan",
-    "ui",
-    "gate",
-    "road",
-    "street",
-    "avenue",
-    "close",
-    "crescent",
-    "drive",
-    "lane",
-    "way",
-    "boulevard",
-    "estate",
-    "village",
-    "town",
-    "area",
-    "junction",
-    "roundabout",
-    "behind",
-    "beside",
-    "near",
-    "opposite",
-    "along",
-    "house",
-    "flat",
-    "apartment",
-    "block",
-    "plot",
+  // Check if it starts with a number (house number) followed by text
+  if (/^\d+\s+/.test(t)) return true;
+
+  // Check for common address keywords (expanded)
+  const addressKeywords = [
+    'road', 'street', 'avenue', 'close', 'crescent', 'drive', 'lane', 'way',
+    'boulevard', 'estate', 'village', 'town', 'area', 'junction', 'roundabout',
+    'behind', 'beside', 'near', 'opposite', 'along', 'house', 'flat',
+    'apartment', 'block', 'plot', 'gate', 'compound', 'quarters', 'barracks',
+    'ibadan', 'oyo', 'lagos', 'abuja', 'ilorin', 'osun', 'ogun', 'ondo', 'ekiti',
+    'kwara', 'kogi', 'niger', 'kaduna', 'kano', 'port harcourt', 'benin',
+    'enugu', 'owerri', 'aba', 'umudike', 'nsukka', 'ife', 'ijebu',
+    'bodija', 'soka', 'agodi', 'alaafin', 'apata', 'challenge',
+    'eleyele', 'gbagi', 'jericho', 'mokola', 'monatan', 'ojo',
+    'sabo', 'tanki', 'uch', 'ui', 'university', 'oyoroad', 'ringroad',
+    'dugbe', 'oke ado', 'oke aro', 'igando', 'lagos', 'abuja', 'kano'
   ];
 
-  const hasIndicator = addressIndicators.some((indicator) =>
-    t.includes(indicator),
-  );
-  if (hasIndicator) return true;
+  // Check if any keyword is present
+  const hasKeyword = addressKeywords.some(keyword => t.includes(keyword));
+  if (hasKeyword) return true;
 
-  if (/\d+\s+(road|street|avenue|close|drive|lane)/i.test(t)) return true;
+  // Check for house number pattern (e.g., "12, Herbert Macaulay")
+  if (/^\d+[,\s]/.test(t)) return true;
 
-  const ibadanAreas = [
-    "bodija",
-    "soka",
-    "agodi",
-    "alaafin",
-    "apata",
-    "challenge",
-    "eleyele",
-    "gbagi",
-    "jericho",
-    "mokola",
-    "monatan",
-    "ojo",
-    "sabo",
-    "tanki",
-    "uch",
-    "ui",
-    "university of ibadan",
-    "oyoroad",
-    "ringroad",
-    "dugbe",
-    "oke ado",
-    "oke aro",
-  ];
+  // Check if it's a single word that looks like a location name
+  const words = t.split(/\s+/);
+  if (words.length === 1 && words[0].length >= 3) {
+    // Single word addresses like "Igando", "Bodija", "Sabo" etc.
+    const commonLocations = [
+      'igando', 'bodija', 'soka', 'agodi', 'alaafin', 'apata', 'challenge',
+      'eleyele', 'gbagi', 'jericho', 'mokola', 'monatan', 'ojo', 'sabo',
+      'tanki', 'uch', 'ui', 'dugbe', 'ibadan', 'oyo', 'lagos', 'abuja',
+      'kano', 'ilorin', 'osun', 'ogun', 'ondo', 'ekiti', 'kwara', 'kogi'
+    ];
+    if (commonLocations.some(loc => t === loc || t.includes(loc))) {
+      return true;
+    }
+  }
 
-  return ibadanAreas.some((area) => t.includes(area));
+  return false;
 }
 
 @Controller("webhooks/whatsapp")
@@ -466,6 +446,7 @@ export class WebhooksController {
       return;
     }
 
+    // ===== Check pending items (quantity collection) =====
     const pendingItems = await this.conversations.getPendingItems(
       conversation.id,
     );
@@ -497,6 +478,44 @@ export class WebhooksController {
       return;
     }
 
+    // ===== Check if we are waiting for address (items exist but no address) =====
+    const draft = await this.conversations.getDraft(conversation.id);
+    const hasItemsButNoAddress = draft.items.length > 0 && !draft.deliveryAddress;
+
+    if (hasItemsButNoAddress && processedText) {
+      // Try to validate as address
+      const result = await this.addressValidation.validateAndFormatResponse(processedText);
+      if (result.valid && result.validatedAddress) {
+        // It's a valid address! Store it.
+        await this.conversations.setDeliveryAddress(
+          conversation.id,
+          result.validatedAddress.fullAddress,
+          {
+            formatted: result.validatedAddress.formatted,
+            neighborhood: result.validatedAddress.neighborhood,
+            landmark: result.validatedAddress.landmark,
+          }
+        );
+
+        // Build the summary with the new address
+        const updatedDraft = await this.conversations.getDraft(conversation.id);
+        const addressInfo = await this.conversations.getDeliveryAddress(conversation.id);
+        let draftSummary = `Noted! Here's your list so far:\n\n`;
+        updatedDraft.items.forEach((item) => {
+          draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
+        });
+        draftSummary += `\n📍 *Delivery to:* ${addressInfo.formatted || addressInfo.address}`;
+        if (addressInfo.neighborhood) {
+          draftSummary += `\n📍 *Area:* ${addressInfo.neighborhood}`;
+        }
+        draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
+        await this.sendAndLog(customer.id, conversation.id, whatsappNumber, draftSummary);
+        await this.conversations.touch(conversation.id);
+        return;
+      }
+    }
+
+    // ===== Check for address (even if no items yet, or after we tried) =====
     if (processedText && looksLikeAddress(processedText)) {
       const addressHandled = await this.handleAddressInput(
         customer.id,
@@ -510,6 +529,7 @@ export class WebhooksController {
       }
     }
 
+    // ===== Check for order intent =====
     if (processedText && looksLikeOrderIntent(processedText)) {
       await this.processOrderMessage(
         customer.id,
@@ -522,6 +542,7 @@ export class WebhooksController {
       return;
     }
 
+    // ===== Fallback keyword router =====
     const replyKey = this.resolveReplyKey(processedText, isNewCustomer);
 
     if (replyKey === "order_prompt") {
