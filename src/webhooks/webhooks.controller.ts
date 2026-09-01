@@ -147,6 +147,8 @@ const MARKET_ITEMS = [
   "coconut",
   "live chicken",
   "ofada rice",
+  "ponmo",
+  "turkey",
 ];
 
 /** Words that must never become cart / quantity-prompt items. */

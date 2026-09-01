@@ -193,11 +193,26 @@ export class ConversationService {
 
   /**
    * Parse quantity from customer message
+   *
+   * IMPORTANT: numbers are normalized to strip thousands-separator commas
+   * ("7,000" -> "7000") before any matching happens. Every regex below uses
+   * \d+, which stops at the first non-digit character — so "7,000" would
+   * otherwise only ever match the leading "7", the currency keyword
+   * ("worth"/"k"/"naira"/etc.) would no longer be immediately adjacent, and
+   * the whole match would fail, incorrectly returning null (i.e. "Sorry, I
+   * didn't catch that") for a perfectly valid amount like "N7,000" or
+   * "7,000 worth".
    */
   parseQuantity(message: string): { value: number; unit: string } | null {
-    const text = message.trim().toLowerCase();
-    
-    // Check for money amounts: "2k", "N500", "500 naira", etc.
+    // Strip commas that sit between two digits (thousands separators) so
+    // "7,000" / "N7,000" / "7,000 worth" all normalize to "7000" / "N7000" /
+    // "7000 worth" before matching. Loop to also handle "7,000,000".
+    let text = message.trim().toLowerCase();
+    while (/\d,\d/.test(text)) {
+      text = text.replace(/(\d),(\d)/g, '$1$2');
+    }
+
+    // Check for money amounts: "2k", "N500", "500 naira", "7000 worth", etc.
     const moneyMatch = text.match(/(?:[n₦]\s*)?(\d+(?:\.\d+)?)\s*(?:k\b|thousand|naira|ngn|worth)/i);
     if (moneyMatch) {
       let amount = Number(moneyMatch[1]);
@@ -221,10 +236,19 @@ export class ConversationService {
       return { value: Number(countMatch[1]), unit: countMatch[2].toLowerCase() };
     }
 
-    // Check for simple number only (assume pieces)
+    // Check for simple number only (no unit given), e.g. a bare reply of
+    // "7000" to "how much fish do you want?". A large bare number with no
+    // unit is, in this market's context, almost always a naira amount
+    // ("7000" meaning "₦7000 worth") rather than 7000 individual pieces —
+    // so route anything >= 100 through the same money-worth path used above.
+    // Small bare numbers ("3", "5") are still assumed to be a piece count.
     const numberMatch = text.match(/^(\d+(?:\.\d+)?)\s*$/);
     if (numberMatch) {
-      return { value: Number(numberMatch[1]), unit: 'pieces' };
+      const value = Number(numberMatch[1]);
+      if (value >= 100) {
+        return { value: 1, unit: `N${Math.round(value)} worth` };
+      }
+      return { value, unit: 'pieces' };
     }
 
     return null;
