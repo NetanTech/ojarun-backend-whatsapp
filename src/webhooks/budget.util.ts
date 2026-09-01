@@ -113,6 +113,7 @@ export function parseBudgetNaira(unit: string, name = ''): number | null {
     /(\d+(?:\.\d+)?)\s*k\s*(?:naira|ngn|worth)\b/, // 5k worth
     /(\d+(?:\.\d+)?)\s*(?:naira|ngn)\b/, // 2000 naira
     /(\d+(?:\.\d+)?)\s*thousand(?:\s*(?:naira|ngn|worth))?/, // 2 thousand
+    /(\d+(?:\.\d+)?)\s*hundred(?:\s*(?:naira|ngn|worth))?/, // 5 hundred
     /(\d+(?:\.\d+)?)\s*worth\b/, // 5000 worth (AI unit style)
   ];
 
@@ -124,6 +125,8 @@ export function parseBudgetNaira(unit: string, name = ''): number | null {
     const matched = m[0];
     if (/\bthousand\b/.test(matched)) {
       amount *= 1000;
+    } else if (/\bhundred\b/.test(matched)) {
+      amount *= 100;
     } else if (/\d\s*k\b/.test(matched) || /[n₦]\s*\d+(?:\.\d+)?\s*k\b/.test(matched)) {
       amount *= 1000;
     }
@@ -187,6 +190,23 @@ export function extractBudgetItemsFromMessage(message: string): BudgetDraftItem[
     if (!name || !Number.isFinite(n) || n <= 0) continue;
     const amount = Math.round(n * 1000);
     if (amount < 100) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({ name, quantity: 1, unit: `N${amount} worth` });
+  }
+
+  // name + bare number (no k/₦/thousand/hundred marker), e.g. "beans 2400", "fish 500".
+  // Nigerian market convention: a bare number attached to an item name is a
+  // naira budget, not a piece count — mirrors parseQuantity's bare-number
+  // branch in conversation.service.ts. The negative lookahead keeps real
+  // weights/counts ("2 kg beans", "3 pieces yam") from being hijacked.
+  const bareNumberRe =
+    /([a-zA-Z][a-zA-Z]*(?:\s+[a-zA-Z][a-zA-Z]*){0,3}?)\s+(\d{2,}(?:\.\d+)?)\b(?!\s*(?:k\b|kg\b|g\b|grams?\b|thousand|hundred|naira|ngn|worth|piece|pieces|pcs|cup|cups|bag|bags|bottle|bottles|can|cans|pack|packs|tuber|tubers|congo|tray|trays))/gi;
+  while ((m = bareNumberRe.exec(text)) !== null) {
+    const name = cleanItemName(m[1]);
+    const amount = Math.round(Number(m[2]));
+    if (!name || !Number.isFinite(amount) || amount < 100) continue;
     const key = name.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);

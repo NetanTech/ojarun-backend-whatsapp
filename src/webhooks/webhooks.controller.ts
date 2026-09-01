@@ -61,7 +61,10 @@ const CONFIRM_PHRASES = new Set([
 ]);
 
 function normalizeForConfirmCheck(text: string): string {
-  return text.trim().toUpperCase().replace(/[.,!?'’]/g, "");
+  return text
+    .trim()
+    .toUpperCase()
+    .replace(/[.,!?'’]/g, "");
 }
 
 function looksLikeCartRequest(text: string): boolean {
@@ -149,6 +152,13 @@ const MARKET_ITEMS = [
   "ofada rice",
   "ponmo",
   "turkey",
+  "bread",
+"bread loaf",
+"semo",
+"semovita",
+"amala",
+"eba",
+"pounded yam flour",
 ];
 
 /** Words that must never become cart / quantity-prompt items. */
@@ -323,7 +333,10 @@ function looksLikeOrderIntent(text: string): boolean {
   const t: string = text.trim().toLowerCase().replace(/\n/g, " ");
 
   const hasMarketItem = MARKET_ITEMS.some((item: string) => {
-    const pattern = new RegExp(`\\b${item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    const pattern = new RegExp(
+      `\\b${item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+      "i",
+    );
     return pattern.test(t);
   });
   if (hasMarketItem) return true;
@@ -737,10 +750,17 @@ export class WebhooksController {
     }
 
     const draft = await this.getSanitizedDraft(conversation.id);
-    const hasItemsButNoAddress = draft.items.length > 0 && !draft.deliveryAddress;
+    const hasItemsButNoAddress =
+      draft.items.length > 0 && !draft.deliveryAddress;
 
-    if (hasItemsButNoAddress && processedText) {
-      const result = await this.addressValidation.validateAndFormatResponse(processedText);
+    if (
+      hasItemsButNoAddress &&
+      processedText &&
+      looksLikeAddress(processedText) &&
+      !looksLikeOrderIntent(processedText)
+    ) {
+      const result =
+        await this.addressValidation.validateAndFormatResponse(processedText);
       if (result.valid && result.validatedAddress) {
         await this.conversations.setDeliveryAddress(
           conversation.id,
@@ -749,11 +769,13 @@ export class WebhooksController {
             formatted: result.validatedAddress.formatted,
             neighborhood: result.validatedAddress.neighborhood,
             landmark: result.validatedAddress.landmark,
-          }
+          },
         );
 
         const updatedDraft = await this.getSanitizedDraft(conversation.id);
-        const addressInfo = await this.conversations.getDeliveryAddress(conversation.id);
+        const addressInfo = await this.conversations.getDeliveryAddress(
+          conversation.id,
+        );
         let draftSummary = `Noted! Here's your list so far:\n\n`;
         updatedDraft.items.forEach((item) => {
           draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
@@ -763,7 +785,12 @@ export class WebhooksController {
           draftSummary += `\n📍 *Area:* ${addressInfo.neighborhood}`;
         }
         draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
-        await this.sendAndLog(customer.id, conversation.id, whatsappNumber, draftSummary);
+        await this.sendAndLog(
+          customer.id,
+          conversation.id,
+          whatsappNumber,
+          draftSummary,
+        );
         await this.conversations.touch(conversation.id);
         return;
       }
@@ -849,7 +876,10 @@ export class WebhooksController {
     history: { role: "user" | "assistant"; content: string }[],
     customerContext: string | null,
   ): Promise<void> {
-    if (looksLikeLanguagePreference(bodyText) || looksLikeMetaOrComplaint(bodyText)) {
+    if (
+      looksLikeLanguagePreference(bodyText) ||
+      looksLikeMetaOrComplaint(bodyText)
+    ) {
       await this.sanitizeStoredDraft(conversationId);
       await this.sendAndLog(
         customerId,
@@ -955,11 +985,16 @@ export class WebhooksController {
         (item) => !isJunkItemName(item.name),
       );
 
+      const QUANTITY_TOKEN_RE =
+        /\d+\s*(kg|kilo|kilos|g|grams?|piece|pcs|cup|cups|bag|bags|bottle|bottles|can|cans|pack|packs|tuber|tubers|congo|tray|trays)\b|[n₦]\s*\d|\d+\s*(k\b|thousand|hundred|naira|ngn|worth)/i;
+
       const realMissingQty = catalogItems.filter(
         (item) =>
           isCatalogItem(item.name) &&
           (item.quantity <= 0 ||
-            (item.unit === "pieces" && item.quantity === 1 && !/\d/.test(bodyText))),
+            (item.unit === "pieces" &&
+              item.quantity === 1 &&
+              !QUANTITY_TOKEN_RE.test(bodyText))),
       );
 
       if (realMissingQty.length > 0 && !resolved.deliveryAddress) {
@@ -1140,7 +1175,10 @@ export class WebhooksController {
     });
 
     try {
-      await this.adminNotification.notifyAdminsOfNewOrder(createdOrder, pricedItems);
+      await this.adminNotification.notifyAdminsOfNewOrder(
+        createdOrder,
+        pricedItems,
+      );
     } catch (error) {
       this.logger.error("Admin notification failed", error);
     }
@@ -1413,7 +1451,10 @@ export class WebhooksController {
     bodyText: string,
     aiResult: AiChatResult | null,
   ): AiChatResult | null {
-    if (looksLikeLanguagePreference(bodyText) || looksLikeMetaOrComplaint(bodyText)) {
+    if (
+      looksLikeLanguagePreference(bodyText) ||
+      looksLikeMetaOrComplaint(bodyText)
+    ) {
       return {
         type: "text",
         content:
@@ -1428,9 +1469,10 @@ export class WebhooksController {
     );
 
     if (aiResult?.type === "draft_update") {
-      const corrected = applyBudgetHintsFromMessage(bodyText, aiResult.items).filter(
-        (item) => !isJunkItemName(item.name),
-      );
+      const corrected = applyBudgetHintsFromMessage(
+        bodyText,
+        aiResult.items,
+      ).filter((item) => !isJunkItemName(item.name));
       const byName = new Map(
         corrected.map((item) => [item.name.toLowerCase(), item]),
       );

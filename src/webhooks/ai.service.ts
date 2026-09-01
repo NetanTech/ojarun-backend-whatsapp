@@ -1,7 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 
-type ChatMessage = { role: 'user' | 'assistant'; content: string };
+type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export type OrderDraftItem = {
   name: string;
@@ -10,9 +10,13 @@ export type OrderDraftItem = {
 };
 
 export type AiChatResult =
-  | { type: 'text'; content: string }
-  | { type: 'draft_update'; items: OrderDraftItem[]; deliveryAddress: string | null }
-  | { type: 'confirm_order' };
+  | { type: "text"; content: string }
+  | {
+      type: "draft_update";
+      items: OrderDraftItem[];
+      deliveryAddress: string | null;
+    }
+  | { type: "confirm_order" };
 
 const FETCH_TIMEOUT_MS = 20_000;
 
@@ -21,13 +25,17 @@ export class AiService {
   private readonly logger = new Logger(AiService.name);
 
   constructor(private readonly config: ConfigService) {
-    const provider = this.config.get<string>('ai.provider');
-    const model = this.config.get<string>('ai.model');
-    const apiKey = this.config.get<string>('ai.apiKey');
-    const baseUrl = this.config.get<string>('ai.baseUrl');
-    
-    this.logger.log(`🔍 AI Config: provider=${provider}, model=${model}, baseUrl=${baseUrl || 'default'}`);
-    this.logger.log(`🔑 API Key present: ${apiKey ? 'YES (starts with ' + apiKey.substring(0, 10) + '...)' : 'NO'}`);
+    const provider = this.config.get<string>("ai.provider");
+    const model = this.config.get<string>("ai.model");
+    const apiKey = this.config.get<string>("ai.apiKey");
+    const baseUrl = this.config.get<string>("ai.baseUrl");
+
+    this.logger.log(
+      `🔍 AI Config: provider=${provider}, model=${model}, baseUrl=${baseUrl || "default"}`,
+    );
+    this.logger.log(
+      `🔑 API Key present: ${apiKey ? "YES (starts with " + apiKey.substring(0, 10) + "...)" : "NO"}`,
+    );
   }
 
   async chat(
@@ -35,10 +43,12 @@ export class AiService {
     history: ChatMessage[] = [],
     customerContext: string | null = null,
   ): Promise<AiChatResult | null> {
-    const provider = this.config.get<string>('ai.provider');
+    const provider = this.config.get<string>("ai.provider");
     const text = userMessage.trim().toUpperCase();
 
-    this.logger.log(`🔍 AI Config: provider=${provider}, model=${this.config.get<string>('ai.model')}`);
+    this.logger.log(
+      `🔍 AI Config: provider=${provider}, model=${this.config.get<string>("ai.model")}`,
+    );
 
     const dynamicGreetings = [
       `Aba! 👋 Welcome to OjaRun! I dey here sharp-sharp to run your market errands for Ibadan. Drop your shopping list or tell me wetin you wan buy today! 🛍️`,
@@ -47,49 +57,75 @@ export class AiService {
       `Aba, how body? 👋 OjaRun service active! Drop your market list here make we run the errand for you sharp-sharp! 🛒`,
     ];
 
-    const greetingWords = ['HEYY', 'HEY', 'HELLO', 'HI', 'HOW FAR', 'YO', 'AFA', 'AOFA', 'YO YO YO'];
-    if (history.length === 0 && (greetingWords.includes(text) || greetingWords.some((g) => text.startsWith(g + ' ')))) {
+    const greetingWords = [
+      "HEYY",
+      "HEY",
+      "HELLO",
+      "HI",
+      "HOW FAR",
+      "YO",
+      "AFA",
+      "AOFA",
+      "YO YO YO",
+    ];
+    if (
+      history.length === 0 &&
+      (greetingWords.includes(text) ||
+        greetingWords.some((g) => text.startsWith(g + " ")))
+    ) {
       const randomIndex = Math.floor(Math.random() * dynamicGreetings.length);
-      return { type: 'text', content: dynamicGreetings[randomIndex] };
+      return { type: "text", content: dynamicGreetings[randomIndex] };
     }
 
     try {
       let result: AiChatResult | null = null;
-      
+
       switch (provider) {
-        case 'anthropic':
-          result = await this.callAnthropic(userMessage, history, customerContext);
+        case "anthropic":
+          result = await this.callAnthropic(
+            userMessage,
+            history,
+            customerContext,
+          );
           break;
-        case 'groq':
+        case "groq":
           result = await this.callGroq(userMessage, history, customerContext);
           break;
-        case 'openai':
-        case 'openrouter': {
+        case "openai":
+        case "openrouter": {
           // 👇 FORCE OpenRouter URL
-          const apiKey = this.config.get<string>('ai.apiKey') || '';
-          let configuredBaseUrl = this.config.get<string>('ai.baseUrl');
-          
+          const apiKey = this.config.get<string>("ai.apiKey") || "";
+          let configuredBaseUrl = this.config.get<string>("ai.baseUrl");
+
           // Log what we have
-          this.logger.log(`🔍 API key starts with: ${apiKey.substring(0, 10)}...`);
-          this.logger.log(`🔍 Configured baseUrl: ${configuredBaseUrl || 'NOT SET'}`);
-          
+          this.logger.log(
+            `🔍 API key starts with: ${apiKey.substring(0, 10)}...`,
+          );
+          this.logger.log(
+            `🔍 Configured baseUrl: ${configuredBaseUrl || "NOT SET"}`,
+          );
+
           // 👇 FORCE: If API key starts with sk-or-v1, use OpenRouter
-          if (apiKey.startsWith('sk-or-v1')) {
-            configuredBaseUrl = 'https://openrouter.ai/api/v1';
-            this.logger.log('🔍 Forcing OpenRouter base URL (API key detected)');
+          if (apiKey.startsWith("sk-or-v1")) {
+            configuredBaseUrl = "https://openrouter.ai/api/v1";
+            this.logger.log(
+              "🔍 Forcing OpenRouter base URL (API key detected)",
+            );
           }
-          
+
           // 👇 FORCE: If no baseUrl configured but we have an API key
           if (!configuredBaseUrl && apiKey) {
-            configuredBaseUrl = 'https://openrouter.ai/api/v1';
-            this.logger.log('🔍 Forcing OpenRouter base URL (no baseUrl configured)');
+            configuredBaseUrl = "https://openrouter.ai/api/v1";
+            this.logger.log(
+              "🔍 Forcing OpenRouter base URL (no baseUrl configured)",
+            );
           }
-          
+
           // Fallback
-          const baseUrl = configuredBaseUrl || 'https://api.openai.com/v1';
-          
+          const baseUrl = configuredBaseUrl || "https://api.openai.com/v1";
+
           this.logger.log(`✅ Using base URL: ${baseUrl}`);
-          
+
           result = await this.callOpenAICompatible(
             `${baseUrl}/chat/completions`,
             userMessage,
@@ -98,7 +134,7 @@ export class AiService {
           );
           break;
         }
-        case 'gemini':
+        case "gemini":
           result = await this.callGemini(userMessage, history, customerContext);
           break;
         default:
@@ -107,36 +143,41 @@ export class AiService {
       }
 
       if (!result) return null;
-      if (result.type !== 'text') return result;
+      if (result.type !== "text") return result;
 
       const recovered = this.tryRecoverToolCallFromText(result.content);
       if (recovered) {
-        this.logger.warn(`Recovered a tool call the model emitted as text: ${result.content.slice(0, 200)}`);
+        this.logger.warn(
+          `Recovered a tool call the model emitted as text: ${result.content.slice(0, 200)}`,
+        );
         return recovered;
       }
 
-      if (/<function[=/(]|update_order_items\s*\)?\s*\(?\s*\{|confirm_order\s*\(/i.test(result.content)) {
+      if (
+        /<function[=/(]|update_order_items\s*\)?\s*\(?\s*\{|confirm_order\s*\(/i.test(
+          result.content,
+        )
+      ) {
         this.logger.warn(
           `Dropping unrecoverable tool-syntax text: ${result.content.slice(0, 200)}`,
         );
         return {
-          type: 'text',
-          content:
-            `Sorry, I no catch that clear 🙏 — abeg send the items again (e.g. "add 3kg tomatoes") or say *"that's all"* to confirm.`,
+          type: "text",
+          content: `Sorry, I no catch that clear 🙏 — abeg send the items again (e.g. "add 3kg tomatoes") or say *"that's all"* to confirm.`,
         };
       }
 
       const trimmed = result.content.trim();
-      if (trimmed === 'Not_food' || trimmed === 'NOT_FOOD') {
+      if (trimmed === "Not_food" || trimmed === "NOT_FOOD") {
         return {
-          type: 'text',
+          type: "text",
           content: `No p, I dey for you! 🤝 Just list the things or ingredients you need from market, or tell me wetin you wan cook make I help you arrange the shopping list sharp-sharp!`,
         };
       }
 
       return result;
     } catch (err) {
-      this.logger.error('AI chat failed', err as Error);
+      this.logger.error("AI chat failed", err as Error);
       return null;
     }
   }
@@ -144,10 +185,13 @@ export class AiService {
   /**
    * Summarize conversation
    */
-  async summarizeConversation(transcript: string, existingContext: string | null): Promise<string | null> {
-    const provider = this.config.get<string>('ai.provider');
+  async summarizeConversation(
+    transcript: string,
+    existingContext: string | null,
+  ): Promise<string | null> {
+    const provider = this.config.get<string>("ai.provider");
     const prompt =
-      `Existing customer profile notes (may be empty):\n${existingContext ?? '(none yet)'}\n\n` +
+      `Existing customer profile notes (may be empty):\n${existingContext ?? "(none yet)"}\n\n` +
       `New conversation transcript:\n${transcript}\n\n` +
       `Rewrite the customer profile notes in 2-4 short plain-text lines. Keep only durable, ` +
       `reusable facts for future orders — delivery area, preferred brands/items, recurring ` +
@@ -156,86 +200,105 @@ export class AiService {
 
     try {
       switch (provider) {
-        case 'anthropic': {
-          const res = await this.fetchWithTimeout('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-api-key': this.config.get<string>('ai.apiKey')!,
-              'anthropic-version': '2023-06-01',
+        case "anthropic": {
+          const res = await this.fetchWithTimeout(
+            "https://api.anthropic.com/v1/messages",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-api-key": this.config.get<string>("ai.apiKey")!,
+                "anthropic-version": "2023-06-01",
+              },
+              body: JSON.stringify({
+                model: this.config.get<string>("ai.model"),
+                max_tokens: 200,
+                messages: [{ role: "user", content: prompt }],
+              }),
             },
-            body: JSON.stringify({
-              model: this.config.get<string>('ai.model'),
-              max_tokens: 200,
-              messages: [{ role: 'user', content: prompt }],
-            }),
-          });
-          if (!res.ok) throw new Error(`Anthropic summarize error: ${res.statusText}`);
+          );
+          if (!res.ok)
+            throw new Error(`Anthropic summarize error: ${res.statusText}`);
           const data = await res.json();
-          const textBlock = data.content?.find((b: any) => b.type === 'text');
+          const textBlock = data.content?.find((b: any) => b.type === "text");
           return textBlock?.text?.trim() || null;
         }
-        case 'groq':
-        case 'openai':
-        case 'openrouter': {
+        case "groq":
+        case "openai":
+        case "openrouter": {
           // 👇 FORCE OpenRouter
-          const apiKey = this.config.get<string>('ai.apiKey') || '';
-          let baseUrl = this.config.get<string>('ai.baseUrl');
-          
-          if (apiKey.startsWith('sk-or-v1')) {
-            baseUrl = 'https://openrouter.ai/api/v1';
+          const apiKey = this.config.get<string>("ai.apiKey") || "";
+          let baseUrl = this.config.get<string>("ai.baseUrl");
+
+          if (apiKey.startsWith("sk-or-v1")) {
+            baseUrl = "https://openrouter.ai/api/v1";
           }
-          
+
           if (!baseUrl && apiKey) {
-            baseUrl = 'https://openrouter.ai/api/v1';
+            baseUrl = "https://openrouter.ai/api/v1";
           }
-          
-          baseUrl = baseUrl || (provider === 'groq' ? 'https://api.groq.com/openai/v1' : 'https://api.openai.com/v1');
+
+          baseUrl =
+            baseUrl ||
+            (provider === "groq"
+              ? "https://api.groq.com/openai/v1"
+              : "https://api.openai.com/v1");
           const url = `${baseUrl}/chat/completions`;
-          
+
           const res = await this.fetchWithTimeout(url, {
-            method: 'POST',
+            method: "POST",
             headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${this.config.get<string>('ai.apiKey')}`,
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${this.config.get<string>("ai.apiKey")}`,
             },
             body: JSON.stringify({
-              model: this.config.get<string>('ai.model'),
+              model: this.config.get<string>("ai.model"),
               max_tokens: 200,
-              messages: [{ role: 'user', content: prompt }],
+              messages: [{ role: "user", content: prompt }],
             }),
           });
-          if (!res.ok) throw new Error(`${provider} summarize error: ${res.statusText}`);
+          if (!res.ok)
+            throw new Error(`${provider} summarize error: ${res.statusText}`);
           const data = await res.json();
           return data.choices?.[0]?.message?.content?.trim() || null;
         }
-        case 'gemini': {
-          const apiKey = this.config.get<string>('ai.apiKey');
-          const model = this.config.get<string>('ai.model') || 'gemini-1.0-pro';
+        case "gemini": {
+          const apiKey = this.config.get<string>("ai.apiKey");
+          const model = this.config.get<string>("ai.model") || "gemini-1.0-pro";
           const res = await this.fetchWithTimeout(
             `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
             {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }),
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{ role: "user", parts: [{ text: prompt }] }],
+              }),
             },
           );
-          if (!res.ok) throw new Error(`Gemini summarize error: ${res.statusText}`);
+          if (!res.ok)
+            throw new Error(`Gemini summarize error: ${res.statusText}`);
           const data = await res.json();
-          return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
+          return (
+            data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null
+          );
         }
         default:
           return null;
       }
     } catch (err) {
-      this.logger.warn(`Conversation summarization failed (non-fatal): ${(err as Error).message}`);
+      this.logger.warn(
+        `Conversation summarization failed (non-fatal): ${(err as Error).message}`,
+      );
       return null;
     }
   }
 
   // ============== SYSTEM PROMPT ==============
+  // ============== SYSTEM PROMPT ==============
   private systemPrompt(customerContext: string | null): string {
-    const base = this.config.get<string>('ai.systemPrompt') ?? 'You are a helpful assistant.';
+    const base =
+      this.config.get<string>("ai.systemPrompt") ??
+      "You are a helpful assistant.";
 
     const orderingProtocol =
       `\n\nOrdering protocol — follow this exactly:\n` +
@@ -244,6 +307,13 @@ export class AiService {
       `- After the customer gives the quantity for one item, store it and ask for the next item's quantity. Continue this pattern until all items have quantities.\n` +
       `- Only call update_order_items when the customer has provided BOTH the item name AND its quantity/amount.\n` +
       `- Nigerian money shorthand: "2k", "5k", "10k" means ₦2000 / ₦5000 / ₦10000. NEVER interpret "2k" as 2kg unless they explicitly wrote "2kg" or "2 kg" or "2 kilos". For money, quantity=1 and unit="N2000 worth" (etc).\n` +
+      `- A bare number attached to an item, with NO unit word at all (e.g. "beans 2400", "fish 500", "titus 5 hundred"), is ALSO a money amount, not a piece count or weight — customers describe their budget by default, not units. Only treat a number as pieces/kg/cups/bags/etc if the customer explicitly names that unit. As a rough guide, a bare number of 100 or more is almost always naira, not a count.\n` +
+      `- Examples:\n` +
+      `  • "beans 2400" → items: [{name: "Beans", quantity: 1, unit: "N2400 worth"}]\n` +
+      `  • "fish 500" → items: [{name: "Fish", quantity: 1, unit: "N500 worth"}]\n` +
+      `  • "titus 5 hundred" → items: [{name: "Titus", quantity: 1, unit: "N500 worth"}]\n` +
+      `  • "2kg beans" → items: [{name: "Beans", quantity: 2, unit: "kg"}] (explicit unit given, not money)\n` +
+      `  • "beans 2" → items: [{name: "Beans", quantity: 2, unit: "pieces"}] (too small to plausibly be a naira budget)\n` +
       `- If the customer gives a delivery address/location at any point, include it as deliveryAddress in that same call.\n` +
       `- Never call confirm_order until the customer has explicitly confirmed they're done and ready (e.g. "yes", "that's all", "go ahead", "confirm"). Keep using update_order_items as the list grows before that.\n` +
       `- confirm_order takes no item arguments — the system already has the full list from your update_order_items calls.`;
@@ -257,48 +327,56 @@ export class AiService {
   private getMarketTools() {
     return [
       {
-        type: 'function',
+        type: "function",
         function: {
-          name: 'update_order_items',
+          name: "update_order_items",
           description:
-            'Call this whenever the customer mentions an item with a quantity/amount. Only include what was specified this turn; the system merges it into the running list for you.',
+            "Call this whenever the customer mentions an item with a quantity/amount. Only include what was specified this turn; the system merges it into the running list for you.",
           parameters: {
-            type: 'object',
+            type: "object",
             properties: {
               items: {
-                type: 'array',
-                description: 'Items with quantities mentioned this turn — not the full running list.',
+                type: "array",
+                description:
+                  "Items with quantities mentioned this turn — not the full running list.",
                 items: {
-                  type: 'object',
+                  type: "object",
                   properties: {
-                    name: { type: 'string', description: 'Specific product name' },
+                    name: {
+                      type: "string",
+                      description: "Specific product name",
+                    },
                     quantity: {
-                      type: 'number',
-                      description: 'Physical amount only (kg, bags, pieces). For money, set to 1.',
+                      type: "number",
+                      description:
+                        "Physical amount only (kg, bags, pieces). For money, set to 1.",
                     },
                     unit: {
-                      type: 'string',
-                      description: 'Physical unit OR money phrase like "N2000 worth"',
+                      type: "string",
+                      description:
+                        'Physical unit OR money phrase like "N2000 worth"',
                     },
                   },
-                  required: ['name', 'quantity', 'unit'],
+                  required: ["name", "quantity", "unit"],
                 },
               },
               deliveryAddress: {
-                type: 'string',
-                description: 'The customer\'s delivery address, only if newly mentioned this turn. Omit otherwise.',
+                type: "string",
+                description:
+                  "The customer's delivery address, only if newly mentioned this turn. Omit otherwise.",
               },
             },
-            required: ['items'],
+            required: ["items"],
           },
         },
       },
       {
-        type: 'function',
+        type: "function",
         function: {
-          name: 'confirm_order',
-          description: 'Call this ONLY when the customer has explicitly confirmed they are done.',
-          parameters: { type: 'object', properties: {} },
+          name: "confirm_order",
+          description:
+            "Call this ONLY when the customer has explicitly confirmed they are done.",
+          parameters: { type: "object", properties: {} },
         },
       },
     ];
@@ -307,35 +385,38 @@ export class AiService {
   private getAnthropicTools() {
     return [
       {
-        name: 'update_order_items',
-        description: 'Call this whenever the customer mentions an item with a quantity/amount.',
+        name: "update_order_items",
+        description:
+          "Call this whenever the customer mentions an item with a quantity/amount.",
         input_schema: {
-          type: 'object',
+          type: "object",
           properties: {
             items: {
-              type: 'array',
+              type: "array",
               items: {
-                type: 'object',
+                type: "object",
                 properties: {
-                  name: { type: 'string' },
-                  quantity: { type: 'number' },
-                  unit: { type: 'string' },
+                  name: { type: "string" },
+                  quantity: { type: "number" },
+                  unit: { type: "string" },
                 },
-                required: ['name', 'quantity', 'unit'],
+                required: ["name", "quantity", "unit"],
               },
             },
             deliveryAddress: {
-              type: 'string',
-              description: 'The customer\'s delivery address, only if newly mentioned.',
+              type: "string",
+              description:
+                "The customer's delivery address, only if newly mentioned.",
             },
           },
-          required: ['items'],
+          required: ["items"],
         },
       },
       {
-        name: 'confirm_order',
-        description: 'Call this ONLY when the customer has explicitly confirmed they are done.',
-        input_schema: { type: 'object', properties: {} },
+        name: "confirm_order",
+        description:
+          "Call this ONLY when the customer has explicitly confirmed they are done.",
+        input_schema: { type: "object", properties: {} },
       },
     ];
   }
@@ -345,35 +426,38 @@ export class AiService {
       {
         function_declarations: [
           {
-            name: 'update_order_items',
-            description: 'Call this whenever the customer mentions an item with a quantity/amount.',
+            name: "update_order_items",
+            description:
+              "Call this whenever the customer mentions an item with a quantity/amount.",
             parameters: {
-              type: 'OBJECT',
+              type: "OBJECT",
               properties: {
                 items: {
-                  type: 'ARRAY',
+                  type: "ARRAY",
                   items: {
-                    type: 'OBJECT',
+                    type: "OBJECT",
                     properties: {
-                      name: { type: 'STRING' },
-                      quantity: { type: 'NUMBER' },
-                      unit: { type: 'STRING' },
+                      name: { type: "STRING" },
+                      quantity: { type: "NUMBER" },
+                      unit: { type: "STRING" },
                     },
-                    required: ['name', 'quantity', 'unit'],
+                    required: ["name", "quantity", "unit"],
                   },
                 },
                 deliveryAddress: {
-                  type: 'STRING',
-                  description: 'The customer\'s delivery address, only if newly mentioned.',
+                  type: "STRING",
+                  description:
+                    "The customer's delivery address, only if newly mentioned.",
                 },
               },
-              required: ['items'],
+              required: ["items"],
             },
           },
           {
-            name: 'confirm_order',
-            description: 'Call this ONLY when the customer has explicitly confirmed they are done.',
-            parameters: { type: 'OBJECT', properties: {} },
+            name: "confirm_order",
+            description:
+              "Call this ONLY when the customer has explicitly confirmed they are done.",
+            parameters: { type: "OBJECT", properties: {} },
           },
         ],
       },
@@ -381,7 +465,10 @@ export class AiService {
   }
 
   // ============== HELPERS ==============
-  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  private async fetchWithTimeout(
+    url: string,
+    init: RequestInit,
+  ): Promise<Response> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
@@ -399,7 +486,7 @@ export class AiService {
 
     if (updateMatch) {
       let jsonText = updateMatch[1];
-      const lastBrace = jsonText.lastIndexOf('}');
+      const lastBrace = jsonText.lastIndexOf("}");
       if (lastBrace !== -1) jsonText = jsonText.slice(0, lastBrace + 1);
       const args = this.parseLooseJson(jsonText);
       if (args) return this.toDraftUpdateResult(args);
@@ -407,7 +494,7 @@ export class AiService {
     }
 
     if (confirmMatch) {
-      return { type: 'confirm_order' };
+      return { type: "confirm_order" };
     }
 
     return null;
@@ -420,9 +507,7 @@ export class AiService {
       // fall through
     }
     try {
-      const softened = text
-        .replace(/,\s*([}\]])/g, '$1')
-        .replace(/'/g, '"');
+      const softened = text.replace(/,\s*([}\]])/g, "$1").replace(/'/g, '"');
       return JSON.parse(softened);
     } catch {
       return null;
@@ -432,15 +517,15 @@ export class AiService {
   private toDraftUpdateResult(args: any): AiChatResult {
     const items = args?.items ?? [];
     return {
-      type: 'draft_update',
+      type: "draft_update",
       items: items
         .map((item: any) => {
           const rawQty = Number(item?.quantity);
           const quantity = Number.isFinite(rawQty) ? rawQty : 1;
           return {
-            name: String(item?.name ?? '').trim(),
+            name: String(item?.name ?? "").trim(),
             quantity,
-            unit: item?.unit?.toString().trim() || 'pieces',
+            unit: item?.unit?.toString().trim() || "pieces",
           };
         })
         .filter((item: OrderDraftItem) => item.name.length > 0),
@@ -454,7 +539,7 @@ export class AiService {
     history: ChatMessage[],
     customerContext: string | null,
   ): Promise<AiChatResult | null> {
-    const baseUrl = 'https://api.groq.com/openai/v1';
+    const baseUrl = "https://api.groq.com/openai/v1";
     return this.callOpenAICompatible(
       `${baseUrl}/chat/completions`,
       userMessage,
@@ -469,35 +554,43 @@ export class AiService {
     history: ChatMessage[],
     customerContext: string | null,
   ): Promise<AiChatResult | null> {
-    const res = await this.fetchWithTimeout('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': this.config.get<string>('ai.apiKey')!,
-        'anthropic-version': '2023-06-01',
+    const res = await this.fetchWithTimeout(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": this.config.get<string>("ai.apiKey")!,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: this.config.get<string>("ai.model"),
+          max_tokens: 1000,
+          system: this.systemPrompt(customerContext),
+          messages: [...history, { role: "user", content: userMessage }],
+          tools: this.getAnthropicTools(),
+        }),
       },
-      body: JSON.stringify({
-        model: this.config.get<string>('ai.model'),
-        max_tokens: 1000,
-        system: this.systemPrompt(customerContext),
-        messages: [...history, { role: 'user', content: userMessage }],
-        tools: this.getAnthropicTools(),
-      }),
-    });
+    );
 
-    if (!res.ok) throw new Error(`Anthropic error: ${res.statusText} (${await res.text()})`);
+    if (!res.ok)
+      throw new Error(
+        `Anthropic error: ${res.statusText} (${await res.text()})`,
+      );
     const data = await res.json();
 
-    const toolUseBlock = data.content?.find((block: any) => block.type === 'tool_use');
-    if (toolUseBlock?.name === 'update_order_items') {
+    const toolUseBlock = data.content?.find(
+      (block: any) => block.type === "tool_use",
+    );
+    if (toolUseBlock?.name === "update_order_items") {
       return this.toDraftUpdateResult(toolUseBlock.input);
     }
-    if (toolUseBlock?.name === 'confirm_order') {
-      return { type: 'confirm_order' };
+    if (toolUseBlock?.name === "confirm_order") {
+      return { type: "confirm_order" };
     }
 
-    const textBlock = data.content?.find((block: any) => block.type === 'text');
-    return textBlock?.text ? { type: 'text', content: textBlock.text } : null;
+    const textBlock = data.content?.find((block: any) => block.type === "text");
+    return textBlock?.text ? { type: "text", content: textBlock.text } : null;
   }
 
   // ============== OPENAI COMPATIBLE (Works with OpenRouter, OpenAI, Groq) ==============
@@ -507,11 +600,13 @@ export class AiService {
     history: ChatMessage[],
     customerContext: string | null,
   ): Promise<AiChatResult | null> {
-    const apiKey = this.config.get<string>('ai.apiKey');
-    const model = this.config.get<string>('ai.model') || 'meta-llama/llama-3.2-3b-instruct:free';
+    const apiKey = this.config.get<string>("ai.apiKey");
+    const model =
+      this.config.get<string>("ai.model") ||
+      "meta-llama/llama-3.2-3b-instruct:free";
 
     if (!apiKey) {
-      this.logger.error('❌ API key is missing');
+      this.logger.error("❌ API key is missing");
       return null;
     }
 
@@ -520,69 +615,69 @@ export class AiService {
 
     try {
       const res = await this.fetchWithTimeout(url, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
           model: model,
           max_tokens: 1000,
           temperature: 0.7,
           messages: [
-            { role: 'system', content: this.systemPrompt(customerContext) },
+            { role: "system", content: this.systemPrompt(customerContext) },
             ...history,
-            { role: 'user', content: userMessage },
+            { role: "user", content: userMessage },
           ],
           tools: this.getMarketTools(),
-          tool_choice: 'auto',
+          tool_choice: "auto",
         }),
       });
 
       if (!res.ok) {
         const rawBody = await res.text();
         this.logger.error(`❌ API error ${res.status}: ${rawBody}`);
-        
+
         try {
           const errorJson = JSON.parse(rawBody);
           this.logger.error(`❌ Error details: ${JSON.stringify(errorJson)}`);
         } catch {
           // not JSON
         }
-        
+
         throw new Error(`Provider error: ${res.statusText} (${rawBody})`);
       }
 
       const data = await res.json();
       const message = data.choices?.[0]?.message;
-      
+
       if (!message) {
-        this.logger.warn('No message in response');
+        this.logger.warn("No message in response");
         return null;
       }
 
       if (message.tool_calls && message.tool_calls.length > 0) {
         const toolCall = message.tool_calls[0];
-        if (toolCall.function.name === 'update_order_items') {
+        if (toolCall.function.name === "update_order_items") {
           try {
             const args = JSON.parse(toolCall.function.arguments);
             return this.toDraftUpdateResult(args);
           } catch (e) {
-            this.logger.error('Failed to parse tool call arguments:', e);
+            this.logger.error("Failed to parse tool call arguments:", e);
           }
         }
-        if (toolCall.function.name === 'confirm_order') {
-          return { type: 'confirm_order' };
+        if (toolCall.function.name === "confirm_order") {
+          return { type: "confirm_order" };
         }
       }
 
       if (message.content) {
-        return { type: 'text', content: message.content };
+        return { type: "text", content: message.content };
       }
 
       return null;
     } catch (error) {
-      this.logger.error('❌ OpenAI-compatible API call failed:', error);
+      this.logger.error("❌ OpenAI-compatible API call failed:", error);
       throw error;
     }
   }
@@ -593,22 +688,22 @@ export class AiService {
     history: ChatMessage[],
     customerContext: string | null,
   ): Promise<AiChatResult | null> {
-    const apiKey = this.config.get<string>('ai.apiKey');
-    const model = this.config.get<string>('ai.model') || 'gemini-1.0-pro';
+    const apiKey = this.config.get<string>("ai.apiKey");
+    const model = this.config.get<string>("ai.model") || "gemini-1.0-pro";
 
     if (!apiKey) {
-      this.logger.error('❌ Gemini API key is missing');
+      this.logger.error("❌ Gemini API key is missing");
       return null;
     }
 
     // Map model names to correct format
     const modelMap: Record<string, string> = {
-      'gemini-pro': 'gemini-1.0-pro',
-      'gemini-1.0-pro': 'gemini-1.0-pro',
-      'gemini-1.5-pro': 'gemini-1.5-pro',
-      'gemini-1.5-flash': 'gemini-1.5-flash',
-      'gemini-1.5-pro-latest': 'gemini-1.5-pro',
-      'gemini-1.5-flash-latest': 'gemini-1.5-flash',
+      "gemini-pro": "gemini-1.0-pro",
+      "gemini-1.0-pro": "gemini-1.0-pro",
+      "gemini-1.5-pro": "gemini-1.5-pro",
+      "gemini-1.5-flash": "gemini-1.5-flash",
+      "gemini-1.5-pro-latest": "gemini-1.5-pro",
+      "gemini-1.5-flash-latest": "gemini-1.5-flash",
     };
 
     const actualModel = modelMap[model] || model;
@@ -616,15 +711,18 @@ export class AiService {
 
     const rawContents = [
       ...history.map((m) => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content || ' ' }],
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content || " " }],
       })),
-      { role: 'user', parts: [{ text: userMessage }] },
+      { role: "user", parts: [{ text: userMessage }] },
     ];
 
     const contents: any[] = [];
     for (const msg of rawContents) {
-      if (contents.length === 0 || contents[contents.length - 1].role !== msg.role) {
+      if (
+        contents.length === 0 ||
+        contents[contents.length - 1].role !== msg.role
+      ) {
         contents.push(msg);
       } else {
         contents[contents.length - 1].parts[0].text += `\n${msg.parts[0].text}`;
@@ -650,9 +748,9 @@ export class AiService {
 
     try {
       const res = await this.fetchWithTimeout(url, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify(requestBody),
       });
@@ -665,28 +763,28 @@ export class AiService {
 
       const data = await res.json();
       const parts = data.candidates?.[0]?.content?.parts;
-      
+
       if (!parts || parts.length === 0) {
-        this.logger.warn('No parts in Gemini response');
+        this.logger.warn("No parts in Gemini response");
         return null;
       }
 
       const functionCallPart = parts.find((p: any) => p.functionCall);
-      if (functionCallPart?.functionCall?.name === 'update_order_items') {
+      if (functionCallPart?.functionCall?.name === "update_order_items") {
         return this.toDraftUpdateResult(functionCallPart.functionCall.args);
       }
-      if (functionCallPart?.functionCall?.name === 'confirm_order') {
-        return { type: 'confirm_order' };
+      if (functionCallPart?.functionCall?.name === "confirm_order") {
+        return { type: "confirm_order" };
       }
 
-      const text = parts.map((p: any) => p.text).join(' ');
+      const text = parts.map((p: any) => p.text).join(" ");
       if (text) {
-        return { type: 'text', content: text };
+        return { type: "text", content: text };
       }
 
       return null;
     } catch (error) {
-      this.logger.error('❌ Gemini API call failed:', error);
+      this.logger.error("❌ Gemini API call failed:", error);
       throw error;
     }
   }

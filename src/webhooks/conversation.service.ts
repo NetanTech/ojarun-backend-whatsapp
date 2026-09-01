@@ -1,9 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
-import { ConfigService } from '@nestjs/config';
-import { ChatSessionStatus, Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-import { AiService, OrderDraftItem } from './ai.service';
+import { Injectable, Logger } from "@nestjs/common";
+import { Cron, CronExpression } from "@nestjs/schedule";
+import { ConfigService } from "@nestjs/config";
+import { ChatSessionStatus, Prisma } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { AiService, OrderDraftItem } from "./ai.service";
 
 const DEFAULT_IDLE_MINUTES = 360; // 6 hours of no messages = new conversation next time
 
@@ -18,7 +18,10 @@ export class ConversationService {
   ) {}
 
   private get idleMinutes(): number {
-    return this.config.get<number>('conversation.idleMinutes') ?? DEFAULT_IDLE_MINUTES;
+    return (
+      this.config.get<number>("conversation.idleMinutes") ??
+      DEFAULT_IDLE_MINUTES
+    );
   }
 
   /**
@@ -32,7 +35,7 @@ export class ConversationService {
 
     const active = await this.prisma.chatSession.findFirst({
       where: { customerId, status: ChatSessionStatus.active },
-      orderBy: { lastActivityAt: 'desc' },
+      orderBy: { lastActivityAt: "desc" },
     });
 
     if (active && active.lastActivityAt >= cutoff) {
@@ -68,8 +71,11 @@ export class ConversationService {
     incomingItems: OrderDraftItem[],
     deliveryAddress: string | null,
   ): Promise<{ items: OrderDraftItem[]; deliveryAddress: string | null }> {
-    const session = await this.prisma.chatSession.findUniqueOrThrow({ where: { id: sessionId } });
-    const existingItems = (session.draftItems as unknown as OrderDraftItem[] | null) ?? [];
+    const session = await this.prisma.chatSession.findUniqueOrThrow({
+      where: { id: sessionId },
+    });
+    const existingItems =
+      (session.draftItems as unknown as OrderDraftItem[] | null) ?? [];
 
     const merged = [...existingItems];
     for (const incoming of incomingItems) {
@@ -87,7 +93,8 @@ export class ConversationService {
       }
     }
 
-    const updatedAddress = deliveryAddress ?? session.draftDeliveryAddress ?? null;
+    const updatedAddress =
+      deliveryAddress ?? session.draftDeliveryAddress ?? null;
 
     await this.prisma.chatSession.update({
       where: { id: sessionId },
@@ -100,8 +107,12 @@ export class ConversationService {
     return { items: merged, deliveryAddress: updatedAddress };
   }
 
-  async getDraft(sessionId: string): Promise<{ items: OrderDraftItem[]; deliveryAddress: string | null }> {
-    const session = await this.prisma.chatSession.findUniqueOrThrow({ where: { id: sessionId } });
+  async getDraft(
+    sessionId: string,
+  ): Promise<{ items: OrderDraftItem[]; deliveryAddress: string | null }> {
+    const session = await this.prisma.chatSession.findUniqueOrThrow({
+      where: { id: sessionId },
+    });
     return {
       items: (session.draftItems as unknown as OrderDraftItem[] | null) ?? [],
       deliveryAddress: session.draftDeliveryAddress ?? null,
@@ -127,8 +138,10 @@ export class ConversationService {
   }
 
   async getPendingItems(sessionId: string): Promise<string[]> {
-    const session = await this.prisma.chatSession.findUniqueOrThrow({ where: { id: sessionId } });
-    return (session as any).pendingItems as string[] ?? [];
+    const session = await this.prisma.chatSession.findUniqueOrThrow({
+      where: { id: sessionId },
+    });
+    return ((session as any).pendingItems as string[]) ?? [];
   }
 
   async clearPendingItems(sessionId: string): Promise<void> {
@@ -150,12 +163,12 @@ export class ConversationService {
       formatted: string;
       neighborhood?: string;
       landmark?: string;
-    }
+    },
   ): Promise<void> {
     const data: any = {
       draftDeliveryAddress: address,
     };
-    
+
     // Store additional address info if available
     if (validatedAddress) {
       data.draftDeliveryAddressMeta = {
@@ -164,7 +177,7 @@ export class ConversationService {
         landmark: validatedAddress.landmark,
       } as unknown as Prisma.InputJsonValue;
     }
-    
+
     await this.prisma.chatSession.update({
       where: { id: sessionId },
       data,
@@ -180,9 +193,11 @@ export class ConversationService {
     neighborhood?: string;
     landmark?: string;
   }> {
-    const session = await this.prisma.chatSession.findUniqueOrThrow({ where: { id: sessionId } });
-    const meta = (session as any).draftDeliveryAddressMeta as any || {};
-    
+    const session = await this.prisma.chatSession.findUniqueOrThrow({
+      where: { id: sessionId },
+    });
+    const meta = ((session as any).draftDeliveryAddressMeta as any) || {};
+
     return {
       address: session.draftDeliveryAddress,
       formatted: meta.formatted,
@@ -209,31 +224,42 @@ export class ConversationService {
     // "7000 worth" before matching. Loop to also handle "7,000,000".
     let text = message.trim().toLowerCase();
     while (/\d,\d/.test(text)) {
-      text = text.replace(/(\d),(\d)/g, '$1$2');
+      text = text.replace(/(\d),(\d)/g, "$1$2");
     }
 
     // Check for money amounts: "2k", "N500", "500 naira", "7000 worth", etc.
-    const moneyMatch = text.match(/(?:[n₦]\s*)?(\d+(?:\.\d+)?)\s*(?:k\b|thousand|naira|ngn|worth)/i);
+    const moneyMatch = text.match(
+      /(?:[n₦]\s*)?(\d+(?:\.\d+)?)\s*(?:k\b|thousand|hundred|naira|ngn|worth)/i,
+    );
     if (moneyMatch) {
       let amount = Number(moneyMatch[1]);
-      if (text.includes('k') || text.includes('thousand')) {
-        amount *= 1000;
-      }
+      if (/k\b|thousand/i.test(text)) amount *= 1000;
+      else if (/hundred/i.test(text)) amount *= 100;
       if (amount >= 100) {
         return { value: 1, unit: `N${Math.round(amount)} worth` };
       }
     }
 
     // Check for weight: "2 kg", "1.5kg", "2 kilos"
-    const weightMatch = text.match(/(\d+(?:\.\d+)?)\s*(kg|kilo|kilos|g|grams?)\b/i);
+    const weightMatch = text.match(
+      /(\d+(?:\.\d+)?)\s*(kg|kilo|kilos|g|grams?)\b/i,
+    );
     if (weightMatch) {
-      return { value: Number(weightMatch[1]), unit: weightMatch[2].toLowerCase() };
+      return {
+        value: Number(weightMatch[1]),
+        unit: weightMatch[2].toLowerCase(),
+      };
     }
 
     // Check for count: "3 pieces", "5 pcs", "2 cups"
-    const countMatch = text.match(/(\d+(?:\.\d+)?)\s*(piece|pcs|cup|cups|bag|bags|bottle|bottles|can|cans|pack|packs|tuber|tubers|congo|tray|trays)\b/i);
+    const countMatch = text.match(
+      /(\d+(?:\.\d+)?)\s*(piece|pcs|cup|cups|bag|bags|bottle|bottles|can|cans|pack|packs|tuber|tubers|congo|tray|trays)\b/i,
+    );
     if (countMatch) {
-      return { value: Number(countMatch[1]), unit: countMatch[2].toLowerCase() };
+      return {
+        value: Number(countMatch[1]),
+        unit: countMatch[2].toLowerCase(),
+      };
     }
 
     // Check for simple number only (no unit given), e.g. a bare reply of
@@ -248,7 +274,7 @@ export class ConversationService {
       if (value >= 100) {
         return { value: 1, unit: `N${Math.round(value)} worth` };
       }
-      return { value, unit: 'pieces' };
+      return { value, unit: "pieces" };
     }
 
     return null;
@@ -276,12 +302,15 @@ export class ConversationService {
    * folds it into Customer.contextSummary — so even a brand new conversation
    * benefits from what was learned before (delivery area, usual items, etc.).
    */
-  @Cron('0 */15 * * * *') // every 15 minutes
+  @Cron("0 */15 * * * *") // every 15 minutes
   async summarizeStaleConversations(): Promise<void> {
     const cutoff = new Date(Date.now() - this.idleMinutes * 60 * 1000);
 
     const toClose = await this.prisma.chatSession.findMany({
-      where: { status: ChatSessionStatus.active, lastActivityAt: { lt: cutoff } },
+      where: {
+        status: ChatSessionStatus.active,
+        lastActivityAt: { lt: cutoff },
+      },
     });
 
     for (const convo of toClose) {
@@ -319,34 +348,52 @@ export class ConversationService {
   async summarizeSession(conversationId: string): Promise<void> {
     const messages = await this.prisma.message.findMany({
       where: { sessionId: conversationId, body: { not: null } },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: "asc" },
     });
 
     // Nothing worth summarizing (e.g. a lone greeting) — mark it done so we
     // don't keep retrying it every 15 minutes forever.
     if (messages.length < 2) {
-      await this.prisma.chatSession.update({ where: { id: conversationId }, data: { summary: '' } });
+      await this.prisma.chatSession.update({
+        where: { id: conversationId },
+        data: { summary: "" },
+      });
       return;
     }
 
-    const transcript = messages.map((m) => `${m.direction === 'inbound' ? 'Customer' : 'Bot'}: ${m.body}`).join('\n');
+    const transcript = messages
+      .map(
+        (m) => `${m.direction === "inbound" ? "Customer" : "Bot"}: ${m.body}`,
+      )
+      .join("\n");
 
     const conversation = await this.prisma.chatSession.findUniqueOrThrow({
       where: { id: conversationId },
       include: { customer: true },
     });
 
-    const updatedSummary = await this.ai.summarizeConversation(transcript, conversation.customer.contextSummary ?? null);
+    const updatedSummary = await this.ai.summarizeConversation(
+      transcript,
+      conversation.customer.contextSummary ?? null,
+    );
     if (!updatedSummary) return; // non-fatal — cron will retry next pass since summary stays null
 
     await this.prisma.$transaction([
-      this.prisma.chatSession.update({ where: { id: conversationId }, data: { summary: updatedSummary } }),
+      this.prisma.chatSession.update({
+        where: { id: conversationId },
+        data: { summary: updatedSummary },
+      }),
       this.prisma.customer.update({
         where: { id: conversation.customerId },
-        data: { contextSummary: updatedSummary, contextSummaryUpdatedAt: new Date() },
+        data: {
+          contextSummary: updatedSummary,
+          contextSummaryUpdatedAt: new Date(),
+        },
       }),
     ]);
 
-    this.logger.log(`Summarized conversation ${conversationId} for customer ${conversation.customerId}`);
+    this.logger.log(
+      `Summarized conversation ${conversationId} for customer ${conversation.customerId}`,
+    );
   }
 }
