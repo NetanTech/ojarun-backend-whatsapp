@@ -147,73 +147,199 @@ const MARKET_ITEMS = [
   "coconut",
   "live chicken",
   "ofada rice",
-  "irish potato",
-  "sweet potato",
-  "palm oil",
-  "vegetable oil",
-  "pepper soup",
-  "beef tripe",
-  "cow foot",
-  "goat head",
-  "dry fish",
-  "stock fish",
 ];
+
+/** Words that must never become cart / quantity-prompt items. */
+const NEVER_ITEMS = new Set([
+  "a",
+  "an",
+  "the",
+  "to",
+  "for",
+  "of",
+  "and",
+  "or",
+  "i",
+  "me",
+  "my",
+  "you",
+  "your",
+  "we",
+  "us",
+  "do",
+  "don't",
+  "dont",
+  "not",
+  "speak",
+  "talk",
+  "pidgin",
+  "english",
+  "language",
+  "how",
+  "many",
+  "times",
+  "would",
+  "say",
+  "that",
+  "this",
+  "please",
+  "stop",
+  "using",
+  "write",
+  "hi",
+  "hello",
+  "hey",
+  "thanks",
+  "thank",
+  "ok",
+  "okay",
+  "yes",
+  "no",
+]);
+
+function normalizeMessage(text: string): string {
+  return text.trim().toLowerCase().replace(/\n/g, " ").replace(/\s+/g, " ");
+}
+
+function isJunkItemName(name: string): boolean {
+  const n = name.trim().toLowerCase().replace(/[’']/g, "");
+  return NEVER_ITEMS.has(n) || NEVER_ITEMS.has(name.trim().toLowerCase());
+}
+
+function isCatalogItem(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  if (isJunkItemName(n)) return false;
+  return MARKET_ITEMS.some((item) => item === n);
+}
+
+/**
+ * Strip any non-catalog / junk lines out of a draft item list. This is the
+ * defensive backstop for drafts that may have been contaminated by an older
+ * bug (or any future bug) that let non-grocery words slip into the cart —
+ * e.g. "Don't", "Speak", "Pidgin", "Me", "How" from a mis-parsed complaint
+ * message. Anything that isn't a recognized MARKET_ITEMS entry is dropped.
+ */
+function sanitizeDraftItems<T extends { name: string }>(items: T[]): T[] {
+  return items.filter((item) => isCatalogItem(item.name));
+}
+
+/**
+ * Customer is asking the bot to change language — never treat this as a list.
+ */
+function looksLikeLanguagePreference(text: string): "en" | "pidgin" | null {
+  if (!text) return null;
+  const t = normalizeMessage(text);
+
+  const wantsEnglish =
+    /don['’]?t\s+(speak|talk|use|write)\s+pidgin/.test(t) ||
+    /do\s+not\s+(speak|talk|use|write)\s+pidgin/.test(t) ||
+    /\bno\s+pidgin\b/.test(t) ||
+    /\bstop\s+(speaking|talking|using)?\s*pidgin\b/.test(t) ||
+    /\bspeak\s+(proper\s+)?english\b/.test(t) ||
+    /\benglish\s+please\b/.test(t) ||
+    /\bin\s+english\b/.test(t) ||
+    /\bnot\s+(in\s+)?pidgin\b/.test(t) ||
+    /\buse\s+english\b/.test(t);
+
+  if (wantsEnglish) return "en";
+
+  const wantsPidgin =
+    /\bspeak\s+pidgin\b/.test(t) ||
+    /\btalk\s+pidgin\b/.test(t) ||
+    /\buse\s+pidgin\b/.test(t) ||
+    /\bin\s+pidgin\b/.test(t);
+
+  if (wantsPidgin) return "pidgin";
+
+  return null;
+}
+
+/** Frustration / instructions about the bot, not groceries. */
+function looksLikeMetaOrComplaint(text: string): boolean {
+  if (!text) return false;
+  if (looksLikeLanguagePreference(text)) return true;
+  const t = normalizeMessage(text);
+  return (
+    /\bhow many times\b/.test(t) ||
+    /\bwould i say\b/.test(t) ||
+    /\bi (already|keep|told|said)\b/.test(t) ||
+    /\bstop (doing|saying|speaking|talking)\b/.test(t) ||
+    /\b(don['’]?t|do not)\s+(speak|talk|use|do)\b/.test(t)
+  );
+}
+
+const ENGLISH_GREETING =
+  "Hi — welcome to OjaRun. I run market errands in Ibadan. Send your shopping list, or tell me what you'd like to buy.";
+
+const LANGUAGE_EN_ACK =
+  "Got it — I'll speak English from here on. What would you like to buy?";
+
+const LANGUAGE_PIDGIN_ACK =
+  "No wahala — I go talk pidgin from now. Wetin you wan buy?";
+
+const META_ACK = "Understood. How can I help with your market list?";
 
 /**
  * Check if the message is just a greeting (not an order).
  */
 function looksLikeGreeting(text: string): boolean {
   if (!text) return false;
+  if (looksLikeLanguagePreference(text) || looksLikeMetaOrComplaint(text)) {
+    return false;
+  }
   const t = text.trim().toLowerCase();
   const greetings = [
-    'hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening',
-    'how are you', 'howdy', 'yo', 'sup', 'what\'s up', 'wassup',
-    'morning', 'afternoon', 'evening', 'night'
+    "hello",
+    "hi",
+    "hey",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "how are you",
+    "howdy",
+    "yo",
+    "sup",
+    "what's up",
+    "wassup",
+    "morning",
+    "afternoon",
+    "evening",
+    "night",
   ];
-  // Exact match or message consists only of greeting words
   const words = t.split(/\s+/);
-  if (words.length > 3) return false; // too long to be just a greeting
-  return greetings.some(g => t === g || (t.includes(g) && words.length <= 2));
+  if (words.length > 3) return false;
+  return greetings.some((g) => t === g || (t.includes(g) && words.length <= 2));
 }
 
 /** First message already contains a shopping request — don't bury it under welcome. */
 function looksLikeOrderIntent(text: string): boolean {
   if (!text) return false;
+  if (looksLikeLanguagePreference(text) || looksLikeMetaOrComplaint(text)) {
+    return false;
+  }
 
-  // ===== FIX: Combine multi-line text with proper typing =====
   const t: string = text.trim().toLowerCase().replace(/\n/g, " ");
 
-  // Check if any market item is mentioned
-  const hasMarketItem = MARKET_ITEMS.some((item: string) => t.includes(item));
+  const hasMarketItem = MARKET_ITEMS.some((item: string) => {
+    const pattern = new RegExp(`\\b${item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    return pattern.test(t);
+  });
   if (hasMarketItem) return true;
 
-  // Check for numbers with items (e.g., "2kg rice", "3 tubers yam")
   const hasNumberWithItem: boolean =
     /\b(\d+)\s*(?:kg|kilo|bag|bottle|pack|cups?|pieces?|tuber|tubers|congo|tray|trays)\s+\w+/i.test(
       t,
     );
   if (hasNumberWithItem) return true;
 
-  // Check for money amounts with items (e.g., "rice 2000", "fish 5k")
   const hasMoneyWithItem: boolean =
     /\b(\w+)\s+\d+[k]?\b/.test(t) || /\b\d+[k]?\s+\w+\b/.test(t);
-  if (hasMoneyWithItem) return true;
+  if (hasMoneyWithItem && hasMarketItem) return true;
 
-  // Check for "I want" patterns without specific items
-  if (
-    /\b(wan|want|buy|get|order|need|i want|i wan|i need|get me|add|bring|send)\b/.test(
-      t,
-    )
-  ) {
-    if (t.length > 5) return true;
-  }
-
-  // Original checks
   return (
-    /\b(buy|wan\b|want|order|need|get me|add|bring|send)\b/.test(t) ||
     /\b(\d+\s*k\b|\d+\s*thousand|naira|₦|\bkg\b|\bbag\b|\bkilo\b|\bkilos\b)\b/.test(
       t,
-    )
+    ) && hasMarketItem
   );
 }
 
@@ -236,46 +362,134 @@ function looksLikeSameAddressRequest(text: string): boolean {
 function looksLikeAddress(text: string): boolean {
   if (!text) return false;
   const t = text.trim().toLowerCase();
-  
-  // Must be at least 3 characters
+
+  if (looksLikeLanguagePreference(text) || looksLikeMetaOrComplaint(text)) {
+    return false;
+  }
+  if (looksLikeGreeting(text)) return false;
+
   if (t.length < 3) return false;
 
-  // Check if it starts with a number (house number) followed by text
   if (/^\d+\s+/.test(t)) return true;
 
-  // Check for common address keywords (expanded)
   const addressKeywords = [
-    'road', 'street', 'avenue', 'close', 'crescent', 'drive', 'lane', 'way',
-    'boulevard', 'estate', 'village', 'town', 'area', 'junction', 'roundabout',
-    'behind', 'beside', 'near', 'opposite', 'along', 'house', 'flat',
-    'apartment', 'block', 'plot', 'gate', 'compound', 'quarters', 'barracks',
-    'ibadan', 'oyo', 'lagos', 'abuja', 'ilorin', 'osun', 'ogun', 'ondo', 'ekiti',
-    'kwara', 'kogi', 'niger', 'kaduna', 'kano', 'port harcourt', 'benin',
-    'enugu', 'owerri', 'aba', 'umudike', 'nsukka', 'ife', 'ijebu',
-    'bodija', 'soka', 'agodi', 'alaafin', 'apata', 'challenge',
-    'eleyele', 'gbagi', 'jericho', 'mokola', 'monatan', 'ojo',
-    'sabo', 'tanki', 'uch', 'ui', 'university', 'oyoroad', 'ringroad',
-    'dugbe', 'oke ado', 'oke aro', 'igando', 'lagos', 'abuja', 'kano'
+    "road",
+    "street",
+    "avenue",
+    "close",
+    "crescent",
+    "drive",
+    "lane",
+    "way",
+    "boulevard",
+    "estate",
+    "village",
+    "town",
+    "area",
+    "junction",
+    "roundabout",
+    "behind",
+    "beside",
+    "near",
+    "opposite",
+    "along",
+    "house",
+    "flat",
+    "apartment",
+    "block",
+    "plot",
+    "gate",
+    "compound",
+    "quarters",
+    "barracks",
+    "ibadan",
+    "oyo",
+    "lagos",
+    "abuja",
+    "ilorin",
+    "osun",
+    "ogun",
+    "ondo",
+    "ekiti",
+    "kwara",
+    "kogi",
+    "niger",
+    "kaduna",
+    "kano",
+    "port harcourt",
+    "benin",
+    "enugu",
+    "owerri",
+    "aba",
+    "umudike",
+    "nsukka",
+    "ife",
+    "ijebu",
+    "bodija",
+    "soka",
+    "agodi",
+    "alaafin",
+    "apata",
+    "challenge",
+    "eleyele",
+    "gbagi",
+    "jericho",
+    "mokola",
+    "monatan",
+    "ojo",
+    "sabo",
+    "tanki",
+    "uch",
+    "ui",
+    "university",
+    "oyoroad",
+    "ringroad",
+    "dugbe",
+    "oke ado",
+    "oke aro",
+    "igando",
   ];
 
-  // Check if any keyword is present
-  const hasKeyword = addressKeywords.some(keyword => t.includes(keyword));
+  const hasKeyword = addressKeywords.some((keyword) => t.includes(keyword));
   if (hasKeyword) return true;
 
-  // Check for house number pattern (e.g., "12, Herbert Macaulay")
   if (/^\d+[,\s]/.test(t)) return true;
 
-  // Check if it's a single word that looks like a location name
   const words = t.split(/\s+/);
   if (words.length === 1 && words[0].length >= 3) {
-    // Single word addresses like "Igando", "Bodija", "Sabo" etc.
     const commonLocations = [
-      'igando', 'bodija', 'soka', 'agodi', 'alaafin', 'apata', 'challenge',
-      'eleyele', 'gbagi', 'jericho', 'mokola', 'monatan', 'ojo', 'sabo',
-      'tanki', 'uch', 'ui', 'dugbe', 'ibadan', 'oyo', 'lagos', 'abuja',
-      'kano', 'ilorin', 'osun', 'ogun', 'ondo', 'ekiti', 'kwara', 'kogi'
+      "igando",
+      "bodija",
+      "soka",
+      "agodi",
+      "alaafin",
+      "apata",
+      "challenge",
+      "eleyele",
+      "gbagi",
+      "jericho",
+      "mokola",
+      "monatan",
+      "ojo",
+      "sabo",
+      "tanki",
+      "uch",
+      "ui",
+      "dugbe",
+      "ibadan",
+      "oyo",
+      "lagos",
+      "abuja",
+      "kano",
+      "ilorin",
+      "osun",
+      "ogun",
+      "ondo",
+      "ekiti",
+      "kwara",
+      "kogi",
     ];
-    if (commonLocations.some(loc => t === loc || t.includes(loc))) {
+    if (commonLocations.some((loc) => t === loc || t.includes(loc))) {
       return true;
     }
   }
@@ -371,7 +585,6 @@ export class WebhooksController {
     );
     const bodyText = msg.type === "text" ? (msg.text?.body ?? null) : null;
 
-    // ===== FIX: Handle multi-line messages with proper TypeScript typing =====
     let processedText = bodyText;
     if (bodyText && bodyText.includes("\n")) {
       const lines = bodyText.split("\n").filter((line: string) => line.trim());
@@ -441,15 +654,61 @@ export class WebhooksController {
         customer.id,
         conversation.id,
         whatsappNumber,
-        `Sorry oh, I can't listen to voice notes yet 🎙️ — just type your message and we go run am sharp-sharp! Reply *MENU* for options.`,
+        `Sorry, I can't listen to voice notes yet. Please type your message. Reply *MENU* for options.`,
       );
       return;
     }
 
-    // ===== Check pending items (quantity collection) =====
-    const pendingItems = await this.conversations.getPendingItems(
+    // Language / "don't speak pidgin" MUST run before quantity collection
+    // and before any item extraction. Otherwise "Don't speak pidgin to me…"
+    // becomes pending items: Don't, Speak, Pidgin, Me, How.
+    if (processedText) {
+      const languagePref = looksLikeLanguagePreference(processedText);
+      if (languagePref) {
+        const junkPending = (
+          await this.conversations.getPendingItems(conversation.id)
+        ).filter((name) => !isCatalogItem(name));
+        if (junkPending.length > 0) {
+          const kept = (
+            await this.conversations.getPendingItems(conversation.id)
+          ).filter(isCatalogItem);
+          await this.conversations.setPendingItems(conversation.id, kept);
+        }
+        // Self-heal: also strip any junk lines that already made it into the
+        // draft cart itself (e.g. from before this fix, or any future miss).
+        await this.sanitizeStoredDraft(conversation.id);
+        await this.sendAndLog(
+          customer.id,
+          conversation.id,
+          whatsappNumber,
+          languagePref === "en" ? LANGUAGE_EN_ACK : LANGUAGE_PIDGIN_ACK,
+        );
+        await this.conversations.touch(conversation.id);
+        return;
+      }
+
+      if (looksLikeMetaOrComplaint(processedText)) {
+        await this.sanitizeStoredDraft(conversation.id);
+        await this.sendAndLog(
+          customer.id,
+          conversation.id,
+          whatsappNumber,
+          META_ACK,
+        );
+        await this.conversations.touch(conversation.id);
+        return;
+      }
+    }
+
+    const pendingItems = (
+      await this.conversations.getPendingItems(conversation.id)
+    ).filter(isCatalogItem);
+    const rawPending = await this.conversations.getPendingItems(
       conversation.id,
     );
+    if (rawPending.length !== pendingItems.length) {
+      await this.conversations.setPendingItems(conversation.id, pendingItems);
+    }
     if (pendingItems.length > 0 && processedText) {
       const handled = await this.handleQuantityResponse(
         customer.id,
@@ -464,29 +723,23 @@ export class WebhooksController {
       }
     }
 
-    // ===== NEW: Check for greeting =====
     if (processedText && looksLikeGreeting(processedText)) {
-      const greetings = [
-        `Aba! 👋 Welcome to OjaRun! I dey here sharp-sharp to run your market errands for Ibadan. Drop your shopping list or tell me wetin you wan buy today! 🛍️`,
-        `How far! 👋 OjaRun dey here for you. Tell me wetin you wan buy from market today make we go help you buy am sharp-sharp! 🍅`,
-        `Oya let's go! 🚀 Welcome to OjaRun. Wetin we dey buy from Ibadan market today? Just drop the list make I arrange am for you.`,
-        `Aba, how body? 👋 OjaRun service active! Drop your market list here make we run the errand for you sharp-sharp! 🛒`,
-      ];
-      const randomIndex = Math.floor(Math.random() * greetings.length);
-      await this.sendAndLog(customer.id, conversation.id, whatsappNumber, greetings[randomIndex]);
+      await this.sendAndLog(
+        customer.id,
+        conversation.id,
+        whatsappNumber,
+        ENGLISH_GREETING,
+      );
       await this.conversations.touch(conversation.id);
       return;
     }
 
-    // ===== Check if we are waiting for address (items exist but no address) =====
-    const draft = await this.conversations.getDraft(conversation.id);
+    const draft = await this.getSanitizedDraft(conversation.id);
     const hasItemsButNoAddress = draft.items.length > 0 && !draft.deliveryAddress;
 
     if (hasItemsButNoAddress && processedText) {
-      // Try to validate as address
       const result = await this.addressValidation.validateAndFormatResponse(processedText);
       if (result.valid && result.validatedAddress) {
-        // It's a valid address! Store it.
         await this.conversations.setDeliveryAddress(
           conversation.id,
           result.validatedAddress.fullAddress,
@@ -497,8 +750,7 @@ export class WebhooksController {
           }
         );
 
-        // Build the summary with the new address
-        const updatedDraft = await this.conversations.getDraft(conversation.id);
+        const updatedDraft = await this.getSanitizedDraft(conversation.id);
         const addressInfo = await this.conversations.getDeliveryAddress(conversation.id);
         let draftSummary = `Noted! Here's your list so far:\n\n`;
         updatedDraft.items.forEach((item) => {
@@ -515,7 +767,6 @@ export class WebhooksController {
       }
     }
 
-    // ===== Check for address (even if no items yet, or after we tried) =====
     if (processedText && looksLikeAddress(processedText)) {
       const addressHandled = await this.handleAddressInput(
         customer.id,
@@ -529,7 +780,6 @@ export class WebhooksController {
       }
     }
 
-    // ===== Check for order intent =====
     if (processedText && looksLikeOrderIntent(processedText)) {
       await this.processOrderMessage(
         customer.id,
@@ -542,7 +792,6 @@ export class WebhooksController {
       return;
     }
 
-    // ===== Fallback keyword router =====
     const replyKey = this.resolveReplyKey(processedText, isNewCustomer);
 
     if (replyKey === "order_prompt") {
@@ -571,7 +820,7 @@ export class WebhooksController {
 
     let staticMessageBody =
       botResponse?.body ??
-      `Aba! 👋 Welcome to OjaRun market service. Drop your list here make we run your market errands for Ibadan sharp-sharp!`;
+      `Hi — welcome to OjaRun. Send your shopping list and I'll run your market errands in Ibadan.`;
 
     staticMessageBody = customer.name
       ? staticMessageBody.replace(/\{\{name\}\}/g, customer.name)
@@ -590,7 +839,6 @@ export class WebhooksController {
     );
   }
 
-  // ===== Process order messages =====
   private async processOrderMessage(
     customerId: string,
     conversationId: string,
@@ -599,7 +847,20 @@ export class WebhooksController {
     history: { role: "user" | "assistant"; content: string }[],
     customerContext: string | null,
   ): Promise<void> {
-    const existingDraft = await this.conversations.getDraft(conversationId);
+    if (looksLikeLanguagePreference(bodyText) || looksLikeMetaOrComplaint(bodyText)) {
+      await this.sanitizeStoredDraft(conversationId);
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        looksLikeLanguagePreference(bodyText) === "pidgin"
+          ? LANGUAGE_PIDGIN_ACK
+          : LANGUAGE_EN_ACK,
+      );
+      return;
+    }
+
+    const existingDraft = await this.getSanitizedDraft(conversationId);
     const isDeterministicConfirm =
       CONFIRM_PHRASES.has(normalizeForConfirmCheck(bodyText)) &&
       existingDraft.items.length > 0;
@@ -623,12 +884,13 @@ export class WebhooksController {
           [],
           lastAddress,
         );
+        const cleanItems = sanitizeDraftItems(items);
 
         let draftSummary = `Noted! Here's your list so far:\n\n`;
-        if (items.length === 0) {
-          draftSummary += `(No items yet — drop wetin you wan buy.)\n`;
+        if (cleanItems.length === 0) {
+          draftSummary += `(No items yet — send what you'd like to buy.)\n`;
         } else {
-          items.forEach((item) => {
+          cleanItems.forEach((item) => {
             draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
           });
         }
@@ -659,7 +921,7 @@ export class WebhooksController {
           customerId,
           conversationId,
           whatsappNumber,
-          `Your cart empty for now 🛒 — just drop the items you want make we start packing am.`,
+          `Your cart is empty — send the items you want and I'll start the list.`,
         );
         return;
       }
@@ -687,13 +949,19 @@ export class WebhooksController {
     const resolved = this.resolveDraftFromAiOrMessage(bodyText, aiResult);
 
     if (resolved?.type === "draft_update") {
-      const itemsWithoutQuantities = resolved.items.filter(
-        (item) =>
-          item.quantity <= 0 || (item.unit === "pieces" && item.quantity === 1),
+      const catalogItems = resolved.items.filter(
+        (item) => !isJunkItemName(item.name),
       );
 
-      if (itemsWithoutQuantities.length > 0 && !resolved.deliveryAddress) {
-        const itemNames = itemsWithoutQuantities.map((item) => item.name);
+      const realMissingQty = catalogItems.filter(
+        (item) =>
+          isCatalogItem(item.name) &&
+          (item.quantity <= 0 ||
+            (item.unit === "pieces" && item.quantity === 1 && !/\d/.test(bodyText))),
+      );
+
+      if (realMissingQty.length > 0 && !resolved.deliveryAddress) {
+        const itemNames = realMissingQty.map((item) => item.name);
         await this.conversations.setPendingItems(conversationId, itemNames);
 
         await this.sendAndLog(
@@ -705,18 +973,19 @@ export class WebhooksController {
         return;
       }
 
-      if (resolved.items.length > 0) {
+      if (catalogItems.length > 0) {
         const { items, deliveryAddress } = await this.conversations.mergeDraft(
           conversationId,
-          resolved.items,
+          catalogItems,
           resolved.deliveryAddress,
         );
+        const cleanItems = sanitizeDraftItems(items);
 
         let draftSummary = `Noted! Here's your list so far:\n\n`;
-        if (items.length === 0) {
-          draftSummary += `(No items yet — drop wetin you wan buy.)\n`;
+        if (cleanItems.length === 0) {
+          draftSummary += `(No items yet — send what you'd like to buy.)\n`;
         } else {
-          items.forEach((item) => {
+          cleanItems.forEach((item) => {
             draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
           });
         }
@@ -748,6 +1017,16 @@ export class WebhooksController {
         );
         return;
       }
+
+      if (resolved.items.length > 0 && catalogItems.length === 0) {
+        await this.sendAndLog(
+          customerId,
+          conversationId,
+          whatsappNumber,
+          META_ACK,
+        );
+        return;
+      }
     }
 
     if (resolved?.type === "confirm_order") {
@@ -776,13 +1055,15 @@ export class WebhooksController {
     }
   }
 
-  // ===== Confirm order method =====
   private async confirmOrder(
     customerId: string,
     conversationId: string,
     whatsappNumber: string,
   ): Promise<void> {
-    const draft = await this.conversations.getDraft(conversationId);
+    // Always read the sanitized draft here — this is the point where an
+    // order is actually created, so junk line items (from a mis-parsed
+    // complaint/language message, past or future) must never reach checkout.
+    const draft = await this.getSanitizedDraft(conversationId);
     const addressInfo =
       await this.conversations.getDeliveryAddress(conversationId);
 
@@ -791,7 +1072,7 @@ export class WebhooksController {
         customerId,
         conversationId,
         whatsappNumber,
-        `You never tell me wetin you wan buy yet 🙏 — just drop your list and we go start!`,
+        `You haven't told me what you'd like to buy yet — send your list and we'll start.`,
       );
       return;
     }
@@ -801,7 +1082,7 @@ export class WebhooksController {
         customerId,
         conversationId,
         whatsappNumber,
-        `Almost there! 📍 I still need your delivery address before I fit place this order — just drop it and say *"that's all"* again to confirm.`,
+        `Almost there! 📍 I still need your delivery address before I can place this order — just drop it and say *"that's all"* again to confirm.`,
       );
       return;
     }
@@ -809,7 +1090,6 @@ export class WebhooksController {
     const finalAddress =
       addressInfo.formatted || addressInfo.address || draft.deliveryAddress;
 
-    // ===== PRICE ITEMS =====
     const pricedItems = await this.priceDraftItems(draft.items);
     const totalNaira = pricedItems.reduce(
       (sum, item) => sum + item.lineTotal,
@@ -823,7 +1103,6 @@ export class WebhooksController {
       select: { name: true },
     });
 
-    // ===== CREATE ORDER =====
     const createdOrder = await this.prisma.$transaction(async (tx) => {
       await tx.pendingOrder.updateMany({
         where: { phone: whatsappNumber, completed: false },
@@ -858,14 +1137,12 @@ export class WebhooksController {
       return order;
     });
 
-    // ===== NOTIFY ADMINS =====
     try {
       await this.adminNotification.notifyAdminsOfNewOrder(createdOrder, pricedItems);
     } catch (error) {
-      this.logger.error('Admin notification failed', error);
+      this.logger.error("Admin notification failed", error);
     }
 
-    // ===== CLEANUP =====
     await this.conversations.clearDraft(conversationId);
     await this.conversations.clearPendingItems(conversationId);
     await this.conversations.closeSession(conversationId);
@@ -881,7 +1158,6 @@ export class WebhooksController {
 
     this.logger.log(`Order processed transactionally for ${whatsappNumber}`);
 
-    // ===== SEND EMAIL NOTIFICATION =====
     try {
       await this.email.sendNewOrderNotification({
         orderId: createdOrder.id,
@@ -902,9 +1178,8 @@ export class WebhooksController {
       );
     }
 
-    // ===== SEND INVOICE TO CUSTOMER =====
     const { window, day } = getDeliveryWindow();
-    let customerInvoiceReceipt = `E don set! 🔥 I have compiled your OjaRun market order list:\n\n`;
+    let customerInvoiceReceipt = `All set. I have compiled your OjaRun market order list:\n\n`;
     pricedItems.forEach((item) => {
       const priceBit =
         item.unitPrice > 0
@@ -925,7 +1200,7 @@ export class WebhooksController {
         this.logger.warn(
           `Order ${createdOrder.id} priced (₦${totalNaira}) but Paystack keys are missing`,
         );
-        customerInvoiceReceipt += `\n\nOrder received — payment link go follow sharp-sharp. 🙏`;
+        customerInvoiceReceipt += `\n\nOrder received — a payment link will follow shortly.`;
       } else {
         const webAppUrl = this.config.get<string>("webAppUrl") || "";
         const callbackUrl = webAppUrl
@@ -955,7 +1230,7 @@ export class WebhooksController {
             },
           });
 
-          customerInvoiceReceipt += `\n\nTap *Pay now* to complete checkout. Once payment clears, our market shoppers start shopping. 🙏`;
+          customerInvoiceReceipt += `\n\nTap *Pay now* to complete checkout. Once payment clears, our market shoppers start shopping.`;
 
           await this.sendPaymentAndLog(
             customerId,
@@ -970,7 +1245,7 @@ export class WebhooksController {
         this.logger.error(
           `Paystack init failed for order ${createdOrder.id}: ${payment.error}`,
         );
-        customerInvoiceReceipt += `\n\nPayment link no gree open just now — our team go send am sharp-sharp. 🙏`;
+        customerInvoiceReceipt += `\n\nThe payment link didn't open just now — our team will send it shortly.`;
       }
     } else {
       const unpriced = pricedItems
@@ -979,7 +1254,7 @@ export class WebhooksController {
       this.logger.warn(
         `Order ${createdOrder.id}: no payment link — allPriced=${allPriced} total=₦${totalNaira} paystack=${this.paystack.isConfigured()} unpriced=[${unpriced.join(", ")}]`,
       );
-      customerInvoiceReceipt += `\n\nOur market shoppers are handling it. We will send over your subtotal breakdown once pricing finishes! 🙏`;
+      customerInvoiceReceipt += `\n\nOur market shoppers are handling it. We will send over your subtotal breakdown once pricing finishes.`;
     }
 
     await this.sendAndLog(
@@ -990,7 +1265,6 @@ export class WebhooksController {
     );
   }
 
-  // ===== Handle address input =====
   private async handleAddressInput(
     customerId: string,
     conversationId: string,
@@ -1021,14 +1295,14 @@ export class WebhooksController {
         },
       );
 
-      const draft = await this.conversations.getDraft(conversationId);
+      const draft = await this.getSanitizedDraft(conversationId);
       const addressInfo =
         await this.conversations.getDeliveryAddress(conversationId);
 
       let draftSummary = `Noted! Here's your list so far:\n\n`;
 
       if (draft.items.length === 0) {
-        draftSummary += `(No items yet — drop wetin you wan buy.)\n`;
+        draftSummary += `(No items yet — send what you'd like to buy.)\n`;
       } else {
         draft.items.forEach((item) => {
           draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
@@ -1055,7 +1329,6 @@ export class WebhooksController {
     return false;
   }
 
-  // ===== Handle quantity responses =====
   private async handleQuantityResponse(
     customerId: string,
     conversationId: string,
@@ -1063,6 +1336,12 @@ export class WebhooksController {
     bodyText: string,
     pendingItems: string[],
   ): Promise<boolean> {
+    const catalogPending = pendingItems.filter(isCatalogItem);
+    if (catalogPending.length === 0) {
+      await this.conversations.setPendingItems(conversationId, []);
+      return false;
+    }
+
     const quantity = this.conversations.parseQuantity(bodyText);
 
     if (!quantity) {
@@ -1070,30 +1349,30 @@ export class WebhooksController {
         customerId,
         conversationId,
         whatsappNumber,
-        `Sorry, I no catch that 🙏 — please tell me how much *${pendingItems[0]}* you want (e.g., "2 cups", "1 kg", "N500 worth")`,
+        `Sorry, I didn't catch that — please tell me how much *${catalogPending[0]}* you want (e.g., "2 cups", "1 kg", "N500 worth")`,
       );
       return true;
     }
 
-    const currentItem = pendingItems[0];
+    const currentItem = catalogPending[0];
     await this.conversations.mergeDraft(
       conversationId,
       [{ name: currentItem, quantity: quantity.value, unit: quantity.unit }],
       null,
     );
 
-    pendingItems.shift();
-    await this.conversations.setPendingItems(conversationId, pendingItems);
+    catalogPending.shift();
+    await this.conversations.setPendingItems(conversationId, catalogPending);
 
-    if (pendingItems.length > 0) {
+    if (catalogPending.length > 0) {
       await this.sendAndLog(
         customerId,
         conversationId,
         whatsappNumber,
-        `Great! ✅ ${quantity.value} ${quantity.unit} of ${currentItem} added.\n\nHow much *${pendingItems[0]}* do you want? (e.g., "2 cups", "1 kg", "N500 worth")`,
+        `Great! ✅ ${quantity.value} ${quantity.unit} of ${currentItem} added.\n\nHow much *${catalogPending[0]}* do you want? (e.g., "2 cups", "1 kg", "N500 worth")`,
       );
     } else {
-      const draft = await this.conversations.getDraft(conversationId);
+      const draft = await this.getSanitizedDraft(conversationId);
       const addressInfo =
         await this.conversations.getDeliveryAddress(conversationId);
 
@@ -1132,10 +1411,24 @@ export class WebhooksController {
     bodyText: string,
     aiResult: AiChatResult | null,
   ): AiChatResult | null {
-    const fromMessage = extractBudgetItemsFromMessage(bodyText);
+    if (looksLikeLanguagePreference(bodyText) || looksLikeMetaOrComplaint(bodyText)) {
+      return {
+        type: "text",
+        content:
+          looksLikeLanguagePreference(bodyText) === "pidgin"
+            ? LANGUAGE_PIDGIN_ACK
+            : LANGUAGE_EN_ACK,
+      };
+    }
+
+    const fromMessage = extractBudgetItemsFromMessage(bodyText).filter(
+      (item) => !isJunkItemName(item.name),
+    );
 
     if (aiResult?.type === "draft_update") {
-      const corrected = applyBudgetHintsFromMessage(bodyText, aiResult.items);
+      const corrected = applyBudgetHintsFromMessage(bodyText, aiResult.items).filter(
+        (item) => !isJunkItemName(item.name),
+      );
       const byName = new Map(
         corrected.map((item) => [item.name.toLowerCase(), item]),
       );
@@ -1166,14 +1459,19 @@ export class WebhooksController {
       };
     }
 
-    // 👇 NEW: Fallback to plain item extraction
-    const plainItems = extractPlainItemNames(bodyText);
+    if (looksLikeGreeting(bodyText) || looksLikeLanguagePreference(bodyText)) {
+      return null;
+    }
+
+    const plainItems = extractPlainItemNames(bodyText).filter(
+      (name) => isCatalogItem(name) && !isJunkItemName(name),
+    );
     if (plainItems.length > 0) {
       this.logger.warn(
         `No budget items found, extracted ${plainItems.length} plain item(s) from message: ${plainItems.join(", ")}`,
       );
       const draftItems = plainItems.map((name) => ({
-        name: name.charAt(0).toUpperCase() + name.slice(1), // Capitalize
+        name: name.charAt(0).toUpperCase() + name.slice(1),
         quantity: 1,
         unit: "pieces",
       }));
@@ -1185,6 +1483,51 @@ export class WebhooksController {
     }
 
     return aiResult;
+  }
+
+  /**
+   * Read the current draft and strip out any non-catalog / junk items
+   * before it's shown to the customer or used for pricing. This is the
+   * main defensive read path — use this instead of a bare
+   * `this.conversations.getDraft(...)` anywhere the draft's item list is
+   * displayed, priced, or persisted onward.
+   */
+  private async getSanitizedDraft(
+    conversationId: string,
+  ): Promise<{ items: OrderDraftItem[]; deliveryAddress: string | null }> {
+    const draft = await this.conversations.getDraft(conversationId);
+    return {
+      ...draft,
+      items: sanitizeDraftItems(draft.items),
+    };
+  }
+
+  /**
+   * Self-healing cleanup: if a draft has accumulated junk line items (e.g.
+   * from before this fix, or from any future extraction bug), strip them
+   * and persist the corrected item list back to storage so the customer's
+   * cart is clean going forward, not just clean when displayed.
+   */
+  private async sanitizeStoredDraft(conversationId: string): Promise<void> {
+    const draft = await this.conversations.getDraft(conversationId);
+    const cleanItems = sanitizeDraftItems(draft.items);
+    if (cleanItems.length === draft.items.length) {
+      return; // nothing to clean
+    }
+    const removed = draft.items
+      .filter((item) => !isCatalogItem(item.name))
+      .map((item) => item.name);
+    this.logger.warn(
+      `Sanitizing draft for session ${conversationId} — removing junk item(s): ${removed.join(", ")}`,
+    );
+    await this.conversations.clearDraft(conversationId);
+    if (cleanItems.length > 0 || draft.deliveryAddress) {
+      await this.conversations.mergeDraft(
+        conversationId,
+        cleanItems,
+        draft.deliveryAddress ?? null,
+      );
+    }
   }
 
   /**
@@ -1268,7 +1611,7 @@ export class WebhooksController {
         customerId,
         conversationId,
         whatsappNumber,
-        `I no see any open order waiting for payment 🙏 — drop a fresh list, or check if you already paid.`,
+        `I don't see any open order waiting for payment — send a fresh list, or check if you already paid.`,
       );
       return true;
     }
@@ -1329,7 +1672,7 @@ export class WebhooksController {
           customerId,
           conversationId,
           whatsappNumber,
-          `Your order *${order.id.slice(0, 8).toUpperCase()}* dey wait for pricing still 🙏\n\nAdd *Titus* (and other items) with prices in admin, or customer can send budget amounts like "titus 5k".`,
+          `Your order *${order.id.slice(0, 8).toUpperCase()}* is still waiting for pricing.\n\nAdd *Titus* (and other items) with prices in admin, or the customer can send budget amounts like "titus 5k".`,
         );
         return true;
       }
@@ -1343,7 +1686,7 @@ export class WebhooksController {
       body += `\n📍 *Delivery to:* ${order.customerNotes}`;
     }
     body += `\n\n💰 *Total:* ₦${displayTotal.toLocaleString("en-NG")}`;
-    body += `\n\nTap *Pay now* below to complete checkout. 🙏`;
+    body += `\n\nTap *Pay now* below to complete checkout.`;
 
     await this.sendPaymentAndLog(
       customerId,
@@ -1401,9 +1744,6 @@ export class WebhooksController {
     return { total, allPriced };
   }
 
-  /**
-   * Sends an outbound WhatsApp message and logs it
-   */
   private async sendAndLog(
     customerId: string,
     conversationId: string,
@@ -1464,26 +1804,26 @@ export class WebhooksController {
     }
   }
 
-  // ===== resolveReplyKey checks order intent first =====
   private resolveReplyKey(body: string | null, isNewCustomer: boolean): string {
     if (!body) {
       if (isNewCustomer) return "welcome";
       return "default";
     }
 
+    if (looksLikeLanguagePreference(body) || looksLikeMetaOrComplaint(body)) {
+      return "default";
+    }
+
     const text = body.trim().toUpperCase();
 
-    // Check for order intent FIRST - this is the key fix
     if (looksLikeOrderIntent(body)) {
       return "default";
     }
 
-    // Then check for new customer welcome
     if (isNewCustomer) {
       return "welcome";
     }
 
-    // Existing customer keywords
     if (text === "MENU" || text.includes("WETIN DEY")) return "menu";
     if (text === "ORDER" || text === "I WANT TO BUY" || text === "I WAN BUY")
       return "order_prompt";
