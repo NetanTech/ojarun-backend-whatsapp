@@ -76,4 +76,9 @@ export class CreateOrderDto {
 
   @IsIn(['cash', 'card'])
   paymentMethod!: 'cash' | 'card';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  promoCode?: string;
 }

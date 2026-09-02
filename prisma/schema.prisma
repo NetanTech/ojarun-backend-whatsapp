@@ -138,6 +138,29 @@ model CustomerShoppingListItem {
   @@map("customer_shopping_list_items")
 }
 
+enum PromoDiscountType {
+  percent
+  fixed
+}
+
+model PromoCode {
+  id               String            @id @default(uuid()) @db.Uuid
+  code             String            @unique
+  discountType     PromoDiscountType @map("discount_type")
+  discountValue    Decimal           @map("discount_value") @db.Decimal(12, 2)
+  minOrderValue    Decimal?          @map("min_order_value") @db.Decimal(12, 2)
+  maxRedemptions   Int?              @map("max_redemptions")
+  perCustomerLimit Int               @default(1) @map("per_customer_limit")
+  expiresAt        DateTime?         @map("expires_at") @db.Timestamptz(6)
+  isActive         Boolean           @default(true) @map("is_active")
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  orders Order[]
+
+  @@map("promo_codes")
+}
+
 model Product {
   id                String                     @id @default(uuid()) @db.Uuid
   name              String
@@ -167,15 +190,19 @@ model Order {
   paystackReference String?           @unique @map("paystack_reference")
   paymentUrl        String?           @map("payment_url")
   paidAt            DateTime?         @map("paid_at") @db.Timestamptz(6)
+  promoCodeId       String?           @map("promo_code_id") @db.Uuid
+  discountAmount    Decimal           @default(0) @map("discount_amount") @db.Decimal(12, 2)
   createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
   items             OrderItem[]
   assignments       OrderAssignment[]
   customer          Customer          @relation(fields: [customerId], references: [id])
+  promoCode         PromoCode?        @relation(fields: [promoCodeId], references: [id])
 
   @@index([customerId])
   @@index([status])
   @@index([paymentStatus])
+  @@index([promoCodeId])
   @@map("orders")
 }
 

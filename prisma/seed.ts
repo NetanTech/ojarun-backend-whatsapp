@@ -93,6 +93,20 @@ async function main() {
     await prisma.product.create({ data: product });
     console.log(`Seeded product: ${product.name}`);
   }
+
+  // Launch promo — free delivery for every customer's first order.
+  await prisma.promoCode.upsert({
+    where: { code: 'WELCOME700' },
+    create: {
+      code: 'WELCOME700',
+      discountType: 'fixed',
+      discountValue: 700,
+      perCustomerLimit: 1,
+      isActive: true,
+    },
+    update: {},
+  });
+  console.log('Seeded promo_code: WELCOME700');
 }
 
 main()

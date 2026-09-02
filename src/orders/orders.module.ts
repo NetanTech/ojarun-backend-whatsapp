@@ -7,9 +7,10 @@ import { CustomerOrdersController } from './customer-orders.controller';
 import { CustomerOrderHistoryController } from './customer-order-history.controller';
 import { OrdersService } from './orders.service';
 import { AdminNotificationService } from '../admins/admin-notification.service';
+import { PromoCodesModule } from '../promo-codes/promo-codes.module';
 
 @Module({
-  imports: [AuthModule, PaystackModule, WhatsappModule],
+  imports: [AuthModule, PaystackModule, WhatsappModule, PromoCodesModule],
   controllers: [
     OrdersController,
     CustomerOrdersController,

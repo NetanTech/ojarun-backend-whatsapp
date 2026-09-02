@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { PaystackService } from '../paystack/paystack.service';
 import { AdminNotificationService } from '../admins/admin-notification.service';
+import { PromoCodesService } from '../promo-codes/promo-codes.service';
 import {
   CreateOrderDto,
   ListOrdersQueryDto,
@@ -33,6 +34,7 @@ export class OrdersService {
     private readonly email: EmailService,
     private readonly paystack: PaystackService,
     private readonly adminNotification: AdminNotificationService,
+    private readonly promoCodes: PromoCodesService,
   ) {}
 
   /** Creates a real order from the web checkout for a logged-in customer. */
@@ -46,7 +48,23 @@ export class OrdersService {
       (sum, item) => sum + item.price * item.quantity,
       0,
     );
-    const total = subtotal + WEB_AGENT_FEE_NAIRA + WEB_DELIVERY_FEE_NAIRA;
+
+    let promoCodeId: string | null = null;
+    let discountAmount = 0;
+    if (dto.promoCode) {
+      const result = await this.promoCodes.validate(
+        dto.promoCode,
+        customerId,
+        subtotal,
+      );
+      promoCodeId = result.promoCode.id;
+      discountAmount = result.discountAmount;
+    }
+
+    const total = Math.max(
+      subtotal + WEB_AGENT_FEE_NAIRA + WEB_DELIVERY_FEE_NAIRA - discountAmount,
+      0,
+    );
     const paystackRef = `oja_${randomBytes(8).toString('hex')}`;
     const deliveryNote = dto.note
       ? `${dto.deliveryAddress}\n\nNote: ${dto.note}`
@@ -62,6 +80,8 @@ export class OrdersService {
           total: new Prisma.Decimal(total.toFixed(2)),
           customerNotes: deliveryNote,
           paystackReference: paystackRef,
+          promoCodeId,
+          discountAmount: new Prisma.Decimal(discountAmount.toFixed(2)),
         },
       });
 
@@ -161,6 +181,7 @@ export class OrdersService {
       id: created.id,
       shortId: created.id.slice(0, 8).toUpperCase(),
       total,
+      discountAmount,
       status: paymentUrl ? OrderStatus.awaiting_payment : OrderStatus.pending,
       paymentMethod: dto.paymentMethod,
       paymentUrl,
@@ -231,6 +252,7 @@ export class OrdersService {
     paymentStatus: PaymentStatus;
     channel: string;
     total: Prisma.Decimal;
+    discountAmount: Prisma.Decimal;
     customerNotes: string | null;
     paymentUrl: string | null;
     createdAt: Date;
@@ -280,6 +302,7 @@ export class OrdersService {
       subtotal,
       agentFee: isWeb ? WEB_AGENT_FEE_NAIRA : 0,
       deliveryFee: isWeb ? WEB_DELIVERY_FEE_NAIRA : 0,
+      discount: Number(order.discountAmount),
       total: Number(order.total),
       payment: {
         method: order.paymentUrl ? 'Card (Paystack)' : 'Pay on Delivery',
