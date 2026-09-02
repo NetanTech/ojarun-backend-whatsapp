@@ -155,20 +155,49 @@ export class AuthService {
       throw new BadRequestException('Invalid or expired invite');
     }
 
+    const whatsapp = normalizeWhatsappNumber(dto.whatsappNumber);
+    if (admin.role === AdminRole.agent && !whatsapp) {
+      throw new BadRequestException(
+        'Agents must add a WhatsApp number to receive new order alerts',
+      );
+    }
+
     const passwordHash = await hashPassword(dto.password);
     const updated = await this.prisma.admin.update({
       where: { id: admin.id },
       data: {
         passwordHash,
         status: AdminStatus.active,
+        isActive: true,
         inviteTokenHash: null,
         lastActiveAt: new Date(),
+        ...(whatsapp ? { whatsappNumber: whatsapp, isOnDuty: true } : {}),
       },
       select: adminPublicSelect,
     });
 
     const accessToken = this.signAccessToken(updated);
     return { accessToken, admin: updated };
+  }
+
+  /** Public preview so accept-invite page can show agent-specific fields */
+  async getInvitePreview(email: string, token: string) {
+    const normalizedEmail = email.trim().toLowerCase();
+    const admin = await this.prisma.admin.findUnique({
+      where: { email: normalizedEmail },
+      select: { name: true, role: true, status: true, inviteTokenHash: true },
+    });
+    if (!admin || admin.status !== AdminStatus.invited || !admin.inviteTokenHash) {
+      throw new BadRequestException('Invalid or expired invite');
+    }
+    if (hashInviteToken(token) !== admin.inviteTokenHash) {
+      throw new BadRequestException('Invalid or expired invite');
+    }
+    return {
+      name: admin.name,
+      role: admin.role,
+      requiresWhatsapp: admin.role === AdminRole.agent,
+    };
   }
 
   async me(adminId: string) {

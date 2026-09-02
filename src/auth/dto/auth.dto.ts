@@ -169,6 +169,16 @@ export class AcceptInviteDto {
     message: 'Password must include at least one letter and one number',
   })
   password!: string;
+
+  /** Required for agents — WhatsApp number for new-order alerts */
+  @IsOptional()
+  @IsString()
+  @MinLength(7)
+  @MaxLength(20)
+  @Matches(/^[+]?[\d\s()-]{7,20}$/, {
+    message: 'Enter a valid WhatsApp number',
+  })
+  whatsappNumber?: string;
 }
 
 export class UpdateAdminDto {

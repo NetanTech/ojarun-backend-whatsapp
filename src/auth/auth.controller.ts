@@ -4,6 +4,7 @@ import {
   Get,
   Patch,
   Body,
+  Query,
   UseGuards,
   HttpCode,
 } from '@nestjs/common';
@@ -40,6 +41,14 @@ export class AuthController {
   @HttpCode(200)
   acceptInvite(@Body() dto: AcceptInviteDto) {
     return this.auth.acceptInvite(dto);
+  }
+
+  @Get('invite-preview')
+  invitePreview(
+    @Query('email') email: string,
+    @Query('token') token: string,
+  ) {
+    return this.auth.getInvitePreview(email, token);
   }
 
   @Post('forgot-password')
