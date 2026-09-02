@@ -18,17 +18,17 @@ model Admin {
   status          AdminStatus   @default(active)
   avatarUrl       String?       @map("avatar_url")
   lastActiveAt    DateTime?     @map("last_active_at") @db.Timestamptz(6)
-  isActive       Boolean           @default(true)
-    isOnDuty       Boolean           @default(true)   
-  whatsappNumber String?          
-  specialty     Specialty?         
+  isActive        Boolean       @default(true)
+  isOnDuty        Boolean       @default(true)
+  whatsappNumber  String?
+  specialty       Specialty?
   inviteTokenHash String?       @map("invite_token_hash")
   inviteMessage   String?       @map("invite_message")
   invitedById     String?       @map("invited_by_id") @db.Uuid
   createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
   conversations   conversations[]
-  assignments   OrderAssignment[]
+  assignments     OrderAssignment[]
 
   @@index([status])
   @@map("admins")
@@ -92,7 +92,7 @@ model Order {
   createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
   items             OrderItem[]
-  assignments   OrderAssignment[]
+  assignments       OrderAssignment[]
   customer          Customer      @relation(fields: [customerId], references: [id])
 
   @@index([customerId])

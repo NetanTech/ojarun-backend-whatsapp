@@ -101,6 +101,20 @@ export class UpdateProfileDto {
   @IsString()
   @MaxLength(500)
   avatarUrl?: string | null;
+
+  /** WhatsApp number for new-order alerts (agents / ops). E.g. +2348012345678 */
+  @IsOptional()
+  @IsString()
+  @MinLength(7)
+  @MaxLength(20)
+  @Matches(/^[+]?[\d\s()-]{7,20}$/, {
+    message: 'Enter a valid WhatsApp number',
+  })
+  whatsappNumber?: string | null;
+
+  /** When false, skip new-order WhatsApp alerts for this admin */
+  @IsOptional()
+  isOnDuty?: boolean;
 }
 
 export class ChangePasswordDto {
@@ -171,4 +185,25 @@ export class UpdateAdminDto {
   @IsOptional()
   @IsEnum(AdminStatus)
   status?: AdminStatus;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(7)
+  @MaxLength(20)
+  @Matches(/^[+]?[\d\s()-]{7,20}$/, {
+    message: 'Enter a valid phone number',
+  })
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(7)
+  @MaxLength(20)
+  @Matches(/^[+]?[\d\s()-]{7,20}$/, {
+    message: 'Enter a valid WhatsApp number',
+  })
+  whatsappNumber?: string | null;
+
+  @IsOptional()
+  isOnDuty?: boolean;
 }

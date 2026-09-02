@@ -1137,7 +1137,7 @@ export class WebhooksController {
 
     const customer = await this.prisma.customer.findUnique({
       where: { id: customerId },
-      select: { name: true },
+      select: { name: true, whatsappNumber: true },
     });
 
     const createdOrder = await this.prisma.$transaction(async (tx) => {
@@ -1176,8 +1176,15 @@ export class WebhooksController {
 
     try {
       await this.adminNotification.notifyAdminsOfNewOrder(
-        createdOrder,
+        {
+          ...createdOrder,
+          customer: {
+            name: customer?.name ?? null,
+            whatsappNumber: customer?.whatsappNumber ?? whatsappNumber,
+          },
+        },
         pricedItems,
+        whatsappNumber,
       );
     } catch (error) {
       this.logger.error("Admin notification failed", error);

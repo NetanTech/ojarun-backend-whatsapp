@@ -41,8 +41,17 @@ const adminPublicSelect = {
   phone: true,
   role: true,
   avatarUrl: true,
+  whatsappNumber: true,
+  isOnDuty: true,
   createdAt: true,
 } as const;
+
+function normalizeWhatsappNumber(raw: string | null | undefined): string | null {
+  if (!raw?.trim()) return null;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 10) return null;
+  return digits.startsWith('234') ? `+${digits}` : `+${digits}`;
+}
 
 @Injectable()
 export class AuthService {
@@ -195,6 +204,10 @@ export class AuthService {
         ...(dto.avatarUrl !== undefined
           ? { avatarUrl: dto.avatarUrl?.trim() || null }
           : {}),
+        ...(dto.whatsappNumber !== undefined
+          ? { whatsappNumber: normalizeWhatsappNumber(dto.whatsappNumber) }
+          : {}),
+        ...(dto.isOnDuty !== undefined ? { isOnDuty: dto.isOnDuty } : {}),
       },
       select: adminPublicSelect,
     });

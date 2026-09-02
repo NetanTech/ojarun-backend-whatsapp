@@ -33,6 +33,8 @@ const adminSelect = {
   status: true,
   lastActiveAt: true,
   inviteMessage: true,
+  whatsappNumber: true,
+  isOnDuty: true,
 } as const;
 
 type AdminListRow = {
@@ -47,7 +49,16 @@ type AdminListRow = {
   status?: AdminStatus;
   lastActiveAt?: Date | null;
   inviteMessage?: string | null;
+  whatsappNumber?: string | null;
+  isOnDuty?: boolean;
 };
+
+function normalizeWhatsappNumber(raw: string | null | undefined): string | null {
+  if (!raw?.trim()) return null;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 10) return null;
+  return digits.startsWith('234') ? `+${digits}` : `+${digits}`;
+}
 
 function normalizeAdmin(row: AdminListRow) {
   return {
@@ -62,6 +73,8 @@ function normalizeAdmin(row: AdminListRow) {
     status: row.status ?? AdminStatus.active,
     lastActiveAt: row.lastActiveAt ?? null,
     inviteMessage: row.inviteMessage ?? null,
+    whatsappNumber: row.whatsappNumber ?? null,
+    isOnDuty: row.isOnDuty ?? true,
   };
 }
 
@@ -257,6 +270,15 @@ export class AdminsService {
           ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
           ...(dto.role !== undefined ? { role: dto.role } : {}),
           ...(dto.status !== undefined ? { status: dto.status } : {}),
+          ...(dto.phone !== undefined ? { phone: dto.phone.trim() } : {}),
+          ...(dto.whatsappNumber !== undefined
+            ? { whatsappNumber: normalizeWhatsappNumber(dto.whatsappNumber) }
+            : {}),
+          ...(dto.isOnDuty !== undefined ? { isOnDuty: dto.isOnDuty } : {}),
+          ...(dto.status === AdminStatus.active ? { isActive: true } : {}),
+          ...(dto.status === AdminStatus.inactive
+            ? { isActive: false, isOnDuty: false }
+            : {}),
         },
         select: adminSelect,
       });

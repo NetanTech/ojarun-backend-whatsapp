@@ -1,7 +1,35 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { AdminRole, AdminStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { ConfigService } from '@nestjs/config';
+
+/** Roles that receive new-order WhatsApp alerts when on duty */
+const NOTIFY_ROLES: AdminRole[] = [
+  AdminRole.agent,
+  AdminRole.admin,
+  AdminRole.superadmin,
+];
+
+export type OrderNotifyPayload = {
+  id: string;
+  total: { toString(): string } | number | string;
+  customerNotes?: string | null;
+  customer?: {
+    name?: string | null;
+    whatsappNumber?: string;
+  } | null;
+};
+
+export type OrderNotifyItem = {
+  name?: string;
+  productNameSnapshot?: string;
+  quantity: number | { toString(): string };
+  unit?: string;
+  unitSnapshot?: string;
+  unitPrice?: number;
+  unitPriceSnapshot?: number | { toString(): string };
+};
 
 @Injectable()
 export class AdminNotificationService {
@@ -14,20 +42,22 @@ export class AdminNotificationService {
   ) {}
 
   /**
-   * Notify admins about a new order.
-   * Sends WhatsApp messages to all active, on-duty admins with WhatsApp numbers.
-   * If no admins are available, logs a warning.
-   * (Email notifications are already sent separately via EmailService.)
+   * WhatsApp alert to on-duty agents/admins with a whatsappNumber saved.
+   * Email to EMAIL_ADMIN_TO is sent separately from confirmOrder().
    */
-  async notifyAdminsOfNewOrder(order: any, items: any[]): Promise<void> {
+  async notifyAdminsOfNewOrder(
+    order: OrderNotifyPayload,
+    items: OrderNotifyItem[],
+    customerPhone?: string,
+  ): Promise<void> {
     try {
-      // Fetch active, on-duty admins with WhatsApp numbers
-      // Note: email is non‑nullable, so we don't need to filter it.
       const admins = await this.prisma.admin.findMany({
         where: {
+          status: AdminStatus.active,
           isActive: true,
           isOnDuty: true,
-          whatsappNumber: { not: null }, // filter admins with a WhatsApp number
+          whatsappNumber: { not: null },
+          role: { in: NOTIFY_ROLES },
         },
         select: {
           id: true,
@@ -39,33 +69,48 @@ export class AdminNotificationService {
 
       if (admins.length === 0) {
         this.logger.warn(
-          'No active, on-duty admins with WhatsApp numbers found. Order notification skipped.',
+          `No on-duty agents with WhatsApp numbers — order ${order.id} alert skipped. ` +
+            `Agents: add WhatsApp number in Settings and keep "On duty" on.`,
         );
         return;
       }
 
-      // Build the notification message
-      const message = this.buildNotificationMessage(order, items);
+      const message = this.buildNotificationMessage(
+        order,
+        items,
+        customerPhone,
+      );
 
-      // Send to each admin
+      let sent = 0;
       for (const admin of admins) {
-        await this.sendToAdmin(admin, order.id, message);
+        const ok = await this.sendToAdmin(admin, order.id, message);
+        if (ok) sent++;
       }
 
-      this.logger.log(`Order ${order.id} notified to ${admins.length} admin(s) via WhatsApp`);
+      this.logger.log(
+        `Order ${order.id} WhatsApp alert: ${sent}/${admins.length} agent(s) notified`,
+      );
     } catch (error) {
       this.logger.error(`Failed to notify admins for order ${order.id}`, error);
     }
   }
 
-  private buildNotificationMessage(order: any, items: any[]): string {
+  private buildNotificationMessage(
+    order: OrderNotifyPayload,
+    items: OrderNotifyItem[],
+    customerPhone?: string,
+  ): string {
     const orderId = order.id.slice(0, 8).toUpperCase();
     const customerName = order.customer?.name || 'Customer';
+    const phone =
+      customerPhone ||
+      order.customer?.whatsappNumber ||
+      'Unknown';
     const total = Number(order.total);
 
     let message = `📦 *NEW ORDER #${orderId}*\n\n`;
     message += `👤 *Customer:* ${customerName}\n`;
-    message += `📱 *Phone:* ${order.customer?.whatsappNumber || 'Unknown'}\n\n`;
+    message += `📱 *Phone:* ${phone}\n\n`;
 
     message += `🛒 *Items:*\n`;
     items.forEach((item) => {
@@ -76,61 +121,68 @@ export class AdminNotificationService {
     });
 
     message += `\n📍 *Delivery:* ${order.customerNotes || 'Not provided'}`;
-    message += `\n💰 *Total:* ₦${total.toLocaleString()}`;
+    message += `\n💰 *Total:* ₦${total.toLocaleString('en-NG')}`;
 
-    // Check if attention is needed
-    const needsAttention = this.checkIfNeedsAttention(order, items);
-    if (needsAttention) {
-      message += `\n\n⚠️ *ATTENTION NEEDED!* Please check the admin panel.`;
+    if (this.checkIfNeedsAttention(order, items)) {
+      message += `\n\n⚠️ *Needs pricing* — some items have no catalog price yet.`;
     }
 
-    const adminUrl = this.config.get<string>('ADMIN_APP_URL');
+    const adminUrl = this.config.get<string>('adminAppUrl');
     if (adminUrl) {
-      message += `\n\n🔗 *Admin Panel:* ${adminUrl}/orders/${order.id}`;
+      message += `\n\n🔗 ${adminUrl.replace(/\/$/, '')}/orders`;
     }
-    message += `\n💬 *Reply to customer:* Use the inbox in the admin panel.`;
 
     return message;
   }
 
-  private checkIfNeedsAttention(order: any, items: any[]): boolean {
+  private checkIfNeedsAttention(
+    order: OrderNotifyPayload,
+    items: OrderNotifyItem[],
+  ): boolean {
     const hasUnpriced = items.some(
-      (i) => Number(i.unitPriceSnapshot || i.unitPrice) <= 0,
+      (i) => Number(i.unitPriceSnapshot ?? i.unitPrice ?? 0) <= 0,
     );
     if (hasUnpriced) return true;
-    const totalQty = items.reduce((sum, i) => sum + Number(i.quantity), 0);
-    if (totalQty > 50) return true;
-    if (Number(order.total) > 100000) return true;
+    if (Number(order.total) <= 0) return true;
     return false;
   }
 
   private async sendToAdmin(
-    admin: any,
+    admin: { id: string; name: string | null; whatsappNumber: string | null },
     orderId: string,
     message: string,
-  ): Promise<void> {
-    try {
-      // Send WhatsApp
-      await this.whatsapp.sendText(admin.whatsappNumber, message);
+  ): Promise<boolean> {
+    if (!admin.whatsappNumber) return false;
 
-      // Create assignment record (optional but useful)
+    try {
+      const sent = await this.whatsapp.sendText(admin.whatsappNumber, message);
+      if (!sent.ok) {
+        this.logger.warn(
+          `WhatsApp to agent ${admin.name} failed: ${sent.error}. ` +
+            `They may need to message the business number first (24h window).`,
+        );
+        return false;
+      }
+
       await this.prisma.orderAssignment.create({
         data: {
-          orderId: orderId,
+          orderId,
           adminId: admin.id,
           status: 'pending',
-          notes: 'Auto-assigned from new order notification',
+          notes: 'Auto-assigned from new order WhatsApp alert',
         },
       });
 
       this.logger.log(
-        `WhatsApp notification sent to admin ${admin.name} (${admin.whatsappNumber})`,
+        `Order alert sent to ${admin.name} (${admin.whatsappNumber})`,
       );
+      return true;
     } catch (error) {
       this.logger.error(
-        `Failed to send WhatsApp to admin ${admin.whatsappNumber}`,
+        `Failed to send WhatsApp to agent ${admin.whatsappNumber}`,
         error,
       );
+      return false;
     }
   }
 }
