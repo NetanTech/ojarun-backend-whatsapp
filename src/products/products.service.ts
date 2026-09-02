@@ -31,6 +31,34 @@ export class ProductsService {
     return this.serialize(product);
   }
 
+  /** Storefront browsing — no auth required, only ever shows available products. */
+  async findAllPublic(search?: string, category?: string) {
+    const where: Prisma.ProductWhereInput = { isAvailable: true };
+    if (search?.trim()) {
+      where.OR = [
+        { name: { contains: search.trim(), mode: 'insensitive' } },
+        { category: { contains: search.trim(), mode: 'insensitive' } },
+      ];
+    }
+    if (category?.trim() && category.trim().toLowerCase() !== 'all') {
+      where.category = { equals: category.trim(), mode: 'insensitive' };
+    }
+
+    const products = await this.prisma.product.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+    });
+    return products.map((p) => this.serialize(p));
+  }
+
+  async findOnePublic(id: string) {
+    const product = await this.prisma.product.findUnique({ where: { id } });
+    if (!product || !product.isAvailable) {
+      throw new NotFoundException('Product not found');
+    }
+    return this.serialize(product);
+  }
+
   async create(dto: CreateProductDto) {
     const product = await this.prisma.product.create({
       data: {

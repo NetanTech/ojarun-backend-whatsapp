@@ -57,6 +57,23 @@ const botResponses = [
   },
 ];
 
+// Same catalog the web app's demo storefront used before it was wired to
+// real data (ojarun-web/constants/data.ts DEMO_PRODUCTS) — seeded here so
+// the storefront isn't nearly empty once it reads from this table instead.
+const products = [
+  { name: 'Egusi (Melon Seeds)', category: 'Meals', currentPrice: 3500, unit: 'Per kg', imageUrl: '/assets/Untitled design.png' },
+  { name: 'Garri (White)', category: 'Meals', currentPrice: 2500, unit: 'Per kg', imageUrl: '/assets/Untitled design.png' },
+  { name: 'Garri (Yellow)', category: 'Meals', currentPrice: 2700, unit: 'Per kg', imageUrl: '/assets/Untitled design.png' },
+  { name: 'Ogbono (Dried)', category: 'Meals', currentPrice: 4000, unit: 'Per kg', imageUrl: '/assets/Untitled design.png' },
+  { name: 'Palm Oil', category: 'Sauces', currentPrice: 3200, unit: 'Per bottle', imageUrl: '/assets/Untitled design.png' },
+  { name: 'Groundnut Oil', category: 'Sauces', currentPrice: 3800, unit: 'Per bottle', imageUrl: '/assets/Untitled design.png' },
+  { name: 'Long Grain Rice', category: 'Meals', currentPrice: 5200, unit: 'Per kg', imageUrl: '/assets/Untitled design.png' },
+  { name: 'Ofada Rice', category: 'Meals', currentPrice: 5800, unit: 'Per kg', imageUrl: '/assets/Untitled design.png' },
+  { name: 'Honey Beans (Oloyin)', category: 'Meals', currentPrice: 4500, unit: 'Per kg', imageUrl: '/assets/Untitled design.png' },
+  { name: 'Dried Stockfish', category: 'Meals', currentPrice: 8500, unit: 'Per kg', imageUrl: '/assets/Untitled design.png' },
+  { name: 'Smoked Catfish', category: 'Fresh Food', currentPrice: 6000, unit: 'Per kg', imageUrl: '/assets/Untitled design.png' },
+];
+
 async function main() {
   for (const response of botResponses) {
     await prisma.botResponse.upsert({
@@ -65,6 +82,16 @@ async function main() {
       update: { body: response.body },
     });
     console.log(`Seeded bot_response: ${response.key}`);
+  }
+
+  for (const product of products) {
+    const existing = await prisma.product.findFirst({ where: { name: product.name } });
+    if (existing) {
+      console.log(`Product already exists, skipping: ${product.name}`);
+      continue;
+    }
+    await prisma.product.create({ data: product });
+    console.log(`Seeded product: ${product.name}`);
   }
 }
 
