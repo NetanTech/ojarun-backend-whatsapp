@@ -8,9 +8,16 @@ import { CustomerOrderHistoryController } from './customer-order-history.control
 import { OrdersService } from './orders.service';
 import { AdminNotificationService } from '../admins/admin-notification.service';
 import { PromoCodesModule } from '../promo-codes/promo-codes.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [AuthModule, PaystackModule, WhatsappModule, PromoCodesModule],
+  imports: [
+    AuthModule,
+    PaystackModule,
+    WhatsappModule,
+    PromoCodesModule,
+    NotificationsModule,
+  ],
   controllers: [
     OrdersController,
     CustomerOrdersController,

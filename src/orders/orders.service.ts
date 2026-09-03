@@ -12,6 +12,7 @@ import { EmailService } from '../email/email.service';
 import { PaystackService } from '../paystack/paystack.service';
 import { AdminNotificationService } from '../admins/admin-notification.service';
 import { PromoCodesService } from '../promo-codes/promo-codes.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   CreateOrderDto,
   ListOrdersQueryDto,
@@ -35,6 +36,7 @@ export class OrdersService {
     private readonly paystack: PaystackService,
     private readonly adminNotification: AdminNotificationService,
     private readonly promoCodes: PromoCodesService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /** Creates a real order from the web checkout for a logged-in customer. */
@@ -177,12 +179,16 @@ export class OrdersService {
       );
     }
 
+    const initialStatus = paymentUrl ? OrderStatus.awaiting_payment : OrderStatus.pending;
+    const shortId = created.id.slice(0, 8).toUpperCase();
+    await this.notifications.notifyOrderStatus(customerId, shortId, initialStatus);
+
     return {
       id: created.id,
-      shortId: created.id.slice(0, 8).toUpperCase(),
+      shortId,
       total,
       discountAmount,
-      status: paymentUrl ? OrderStatus.awaiting_payment : OrderStatus.pending,
+      status: initialStatus,
       paymentMethod: dto.paymentMethod,
       paymentUrl,
       paymentError,
@@ -228,6 +234,11 @@ export class OrdersService {
       },
       include: { items: { include: { product: true } } },
     });
+    await this.notifications.notifyOrderStatus(
+      customerId,
+      id.slice(0, 8).toUpperCase(),
+      OrderStatus.cancelled,
+    );
     return this.serializeForCustomer(updated);
   }
 
@@ -246,6 +257,11 @@ export class OrdersService {
       data: { status: OrderStatus.delivered },
       include: { items: { include: { product: true } } },
     });
+    await this.notifications.notifyOrderStatus(
+      customerId,
+      id.slice(0, 8).toUpperCase(),
+      OrderStatus.delivered,
+    );
     return this.serializeForCustomer(updated);
   }
 
@@ -383,6 +399,11 @@ export class OrdersService {
         },
       },
     });
+    await this.notifications.notifyOrderStatus(
+      order.customerId,
+      order.id.slice(0, 8).toUpperCase(),
+      order.status,
+    );
     return this.serializeDetail(order);
   }
 

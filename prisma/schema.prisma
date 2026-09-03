@@ -88,6 +88,7 @@ model Customer {
   favorites               CustomerFavorite[]
   shoppingLists           CustomerShoppingList[]
   addresses               CustomerAddress[]
+  notifications           CustomerNotification[]
   contextSummary          String?                @map("context_summary")
   contextSummaryUpdatedAt DateTime?              @map("context_summary_updated_at") @db.Timestamptz(6)
 
@@ -137,6 +138,27 @@ model CustomerShoppingListItem {
 
   @@index([listId])
   @@map("customer_shopping_list_items")
+}
+
+enum NotificationType {
+  order
+  promotion
+  profile
+}
+
+model CustomerNotification {
+  id         String           @id @default(uuid()) @db.Uuid
+  customerId String           @map("customer_id") @db.Uuid
+  type       NotificationType
+  title      String
+  message    String
+  isRead     Boolean          @default(false) @map("is_read")
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("customer_notifications")
 }
 
 model CustomerAddress {

@@ -22,6 +22,7 @@ import { FavoritesModule } from './favorites/favorites.module';
 import { ShoppingListsModule } from './shopping-lists/shopping-lists.module';
 import { PromoCodesModule } from './promo-codes/promo-codes.module';
 import { AddressesModule } from './addresses/addresses.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { AddressesModule } from './addresses/addresses.module';
     ShoppingListsModule,
     PromoCodesModule,
     AddressesModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}
