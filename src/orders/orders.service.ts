@@ -210,7 +210,7 @@ export class OrdersService {
   }
 
   /** Customer cancels their own order — blocked once it's already delivered or cancelled. */
-  async cancelMine(customerId: string, id: string) {
+  async cancelMine(customerId: string, id: string, reason?: string) {
     const order = await this.prisma.order.findFirst({ where: { id, customerId } });
     if (!order) throw new NotFoundException('Order not found');
     if (
@@ -222,7 +222,10 @@ export class OrdersService {
 
     const updated = await this.prisma.order.update({
       where: { id },
-      data: { status: OrderStatus.cancelled },
+      data: {
+        status: OrderStatus.cancelled,
+        cancelReason: reason?.trim() || null,
+      },
       include: { items: { include: { product: true } } },
     });
     return this.serializeForCustomer(updated);
@@ -253,6 +256,7 @@ export class OrdersService {
     channel: string;
     total: Prisma.Decimal;
     discountAmount: Prisma.Decimal;
+    cancelReason: string | null;
     customerNotes: string | null;
     paymentUrl: string | null;
     createdAt: Date;
@@ -304,6 +308,7 @@ export class OrdersService {
       deliveryFee: isWeb ? WEB_DELIVERY_FEE_NAIRA : 0,
       discount: Number(order.discountAmount),
       total: Number(order.total),
+      cancelReason: order.cancelReason || undefined,
       payment: {
         method: order.paymentUrl ? 'Card (Paystack)' : 'Pay on Delivery',
       },

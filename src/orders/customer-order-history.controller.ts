@@ -1,5 +1,14 @@
-import { Controller, Get, HttpCode, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { OrdersService } from './orders.service';
+import { CancelOrderDto } from './dto/order.dto';
 import { CustomerJwtAuthGuard } from '../customer-auth/customer-jwt-auth.guard';
 import {
   CurrentCustomer,
@@ -26,8 +35,12 @@ export class CustomerOrderHistoryController {
 
   @Post(':id/cancel')
   @HttpCode(200)
-  cancel(@CurrentCustomer() customer: AuthCustomer, @Param('id') id: string) {
-    return this.orders.cancelMine(customer.id, id);
+  cancel(
+    @CurrentCustomer() customer: AuthCustomer,
+    @Param('id') id: string,
+    @Body() dto: CancelOrderDto,
+  ) {
+    return this.orders.cancelMine(customer.id, id, dto.reason);
   }
 
   @Post(':id/confirm')

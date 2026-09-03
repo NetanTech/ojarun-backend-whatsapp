@@ -20,6 +20,13 @@ export class UpdateOrderStatusDto {
   status!: OrderStatus;
 }
 
+export class CancelOrderDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  reason?: string;
+}
+
 export class ListOrdersQueryDto {
   @IsOptional()
   @IsString()

@@ -209,6 +209,7 @@ model Order {
   paidAt            DateTime?         @map("paid_at") @db.Timestamptz(6)
   promoCodeId       String?           @map("promo_code_id") @db.Uuid
   discountAmount    Decimal           @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  cancelReason      String?           @map("cancel_reason")
   createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
   items             OrderItem[]
