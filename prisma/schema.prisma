@@ -87,6 +87,7 @@ model Customer {
   chatSessions            ChatSession[]
   favorites               CustomerFavorite[]
   shoppingLists           CustomerShoppingList[]
+  addresses               CustomerAddress[]
   contextSummary          String?                @map("context_summary")
   contextSummaryUpdatedAt DateTime?              @map("context_summary_updated_at") @db.Timestamptz(6)
 
@@ -136,6 +137,22 @@ model CustomerShoppingListItem {
 
   @@index([listId])
   @@map("customer_shopping_list_items")
+}
+
+model CustomerAddress {
+  id         String   @id @default(uuid()) @db.Uuid
+  customerId String   @map("customer_id") @db.Uuid
+  label      String?
+  address    String
+  landmark   String?
+  isDefault  Boolean  @default(false) @map("is_default")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("customer_addresses")
 }
 
 enum PromoDiscountType {

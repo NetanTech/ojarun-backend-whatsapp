@@ -21,6 +21,7 @@ import { PaystackModule } from './paystack/paystack.module';
 import { FavoritesModule } from './favorites/favorites.module';
 import { ShoppingListsModule } from './shopping-lists/shopping-lists.module';
 import { PromoCodesModule } from './promo-codes/promo-codes.module';
+import { AddressesModule } from './addresses/addresses.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { PromoCodesModule } from './promo-codes/promo-codes.module';
     FavoritesModule,
     ShoppingListsModule,
     PromoCodesModule,
+    AddressesModule,
   ],
 })
 export class AppModule {}
