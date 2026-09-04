@@ -20,8 +20,9 @@ function fromBase64url(input: string): Buffer {
 
 export type TokenPayload = {
   sub: string;
-  email: string;
+  email?: string;
   type: 'access' | 'reset';
+  kind?: 'admin' | 'customer';
   name?: string | null;
   phone?: string | null;
   role?: string;

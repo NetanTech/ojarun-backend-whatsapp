@@ -39,6 +39,10 @@ Your job each turn:
       process.env.ZEPTOMAIL_PASS ||
       '',
   },
+  sms: {
+    termiiApiKey: process.env.TERMII_API_KEY ?? '',
+    senderId: process.env.SMS_SENDER_ID ?? 'Ojarun',
+  },
   jwt: {
     secret: process.env.JWT_SECRET ?? 'dev-only-change-me',
     expiresIn: process.env.JWT_EXPIRES_IN ?? '7d',

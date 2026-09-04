@@ -250,6 +250,106 @@ export class EmailService {
     });
   }
 
+  async sendCustomerEmailVerificationOtp(to: string, code: string): Promise<void> {
+    const fromEmail = this.config.get<string>('email.from');
+    const fromName = this.config.get<string>('email.fromName') || 'OjaRun';
+    const apiToken = this.config.get<string>('email.zeptoApiToken');
+
+    if (!fromEmail || !apiToken) {
+      this.logger.warn(
+        'EMAIL_FROM / ZEPTOMAIL_API_TOKEN not configured — logging OTP in dev only',
+      );
+      this.logger.warn(`Email verification OTP for ${to}: ${code}`);
+      return;
+    }
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head><meta charset="utf-8"></head>
+        <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #F4F1EA;">
+          <div style="max-width: 560px; margin: 0 auto; padding: 24px 16px;">
+            <div style="background: #E8F0DC; border-radius: 12px 12px 0 0; padding: 28px 30px;">
+              <p style="margin: 0 0 6px 0; font-size: 13px; font-weight: 700; letter-spacing: 0.5px; color: #2F5233; text-transform: uppercase;">OjaRun</p>
+              <h1 style="margin: 0; font-size: 24px; color: #1F3820; font-weight: 700;">Verify your email</h1>
+            </div>
+            <div style="background: #FFFFFF; padding: 30px;">
+              <p style="margin: 0 0 16px 0; font-size: 15px; color: #2F2A20;">
+                Use this code to verify your Ojarun account. It expires in 5 minutes.
+              </p>
+              <p style="margin: 0; font-size: 32px; letter-spacing: 8px; font-weight: 700; color: #1F3820; text-align: center;">
+                ${escapeHtml(code)}
+              </p>
+            </div>
+            <div style="background: #1F3820; border-radius: 0 0 12px 12px; padding: 16px 30px; text-align: center;">
+              <p style="margin: 0; font-size: 12px; color: #C7D6C1;">If you did not create this account, you can ignore this email.</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+
+    await this.send({
+      to,
+      toName: 'Ojarun Customer',
+      fromEmail,
+      fromName,
+      apiToken,
+      subject: 'Verify your Ojarun account',
+      html,
+    });
+  }
+
+  async sendCustomerPasswordResetOtp(to: string, code: string): Promise<void> {
+    const fromEmail = this.config.get<string>('email.from');
+    const fromName = this.config.get<string>('email.fromName') || 'OjaRun';
+    const apiToken = this.config.get<string>('email.zeptoApiToken');
+
+    if (!fromEmail || !apiToken) {
+      this.logger.warn(
+        'EMAIL_FROM / ZEPTOMAIL_API_TOKEN not configured — logging OTP in dev only',
+      );
+      this.logger.warn(`Customer password reset OTP for ${to}: ${code}`);
+      return;
+    }
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head><meta charset="utf-8"></head>
+        <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #F4F1EA;">
+          <div style="max-width: 560px; margin: 0 auto; padding: 24px 16px;">
+            <div style="background: #E8F0DC; border-radius: 12px 12px 0 0; padding: 28px 30px;">
+              <p style="margin: 0 0 6px 0; font-size: 13px; font-weight: 700; letter-spacing: 0.5px; color: #2F5233; text-transform: uppercase;">OjaRun</p>
+              <h1 style="margin: 0; font-size: 24px; color: #1F3820; font-weight: 700;">Password reset code</h1>
+            </div>
+            <div style="background: #FFFFFF; padding: 30px;">
+              <p style="margin: 0 0 16px 0; font-size: 15px; color: #2F2A20;">
+                Use this code to reset your Ojarun password. It expires in 10 minutes.
+              </p>
+              <p style="margin: 0; font-size: 32px; letter-spacing: 8px; font-weight: 700; color: #1F3820; text-align: center;">
+                ${escapeHtml(code)}
+              </p>
+            </div>
+            <div style="background: #1F3820; border-radius: 0 0 12px 12px; padding: 16px 30px; text-align: center;">
+              <p style="margin: 0; font-size: 12px; color: #C7D6C1;">If you did not request this, you can ignore this email.</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+
+    await this.send({
+      to,
+      toName: 'Ojarun Customer',
+      fromEmail,
+      fromName,
+      apiToken,
+      subject: 'Your Ojarun password reset code',
+      html,
+    });
+  }
+
   private async send(opts: {
     to: string;
     toName: string;

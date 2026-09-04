@@ -9,24 +9,24 @@ datasource db {
 }
 
 model Admin {
-  id              String        @id @default(uuid()) @db.Uuid
-  email           String        @unique
-  passwordHash    String        @map("password_hash")
+  id              String            @id @default(uuid()) @db.Uuid
+  email           String            @unique
+  passwordHash    String            @map("password_hash")
   name            String?
   phone           String?
-  role            AdminRole     @default(admin)
-  status          AdminStatus   @default(active)
-  avatarUrl       String?       @map("avatar_url")
-  lastActiveAt    DateTime?     @map("last_active_at") @db.Timestamptz(6)
-  isActive        Boolean       @default(true)
-  isOnDuty        Boolean       @default(true)
+  role            AdminRole         @default(admin)
+  status          AdminStatus       @default(active)
+  avatarUrl       String?           @map("avatar_url")
+  lastActiveAt    DateTime?         @map("last_active_at") @db.Timestamptz(6)
+  isActive        Boolean           @default(true)
+  isOnDuty        Boolean           @default(true)
   whatsappNumber  String?
   specialty       Specialty?
-  inviteTokenHash String?       @map("invite_token_hash")
-  inviteMessage   String?       @map("invite_message")
-  invitedById     String?       @map("invited_by_id") @db.Uuid
-  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  inviteTokenHash String?           @map("invite_token_hash")
+  inviteMessage   String?           @map("invite_message")
+  invitedById     String?           @map("invited_by_id") @db.Uuid
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
   conversations   conversations[]
   assignments     OrderAssignment[]
 
@@ -46,73 +46,218 @@ model PasswordResetOtp {
   @@map("password_reset_otps")
 }
 
+/// Email verification codes sent right after signup.
+model CustomerOtp {
+  id        String    @id @default(uuid()) @db.Uuid
+  email     String
+  codeHash  String    @map("code_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([email])
+  @@map("customer_otps")
+}
+
+model CustomerPasswordResetOtp {
+  id        String    @id @default(uuid()) @db.Uuid
+  email     String
+  codeHash  String    @map("code_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([email])
+  @@map("customer_password_reset_otps")
+}
+
 model Customer {
-  id                      String         @id @default(uuid()) @db.Uuid
-  whatsappNumber          String         @unique @map("whatsapp_number")
+  id                      String                 @id @default(uuid()) @db.Uuid
+  whatsappNumber          String                 @unique @map("whatsapp_number")
   name                    String?
-  createdAt               DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt               DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  email                   String?                @unique
+  passwordHash            String?                @map("password_hash")
+  emailVerifiedAt         DateTime?              @map("email_verified_at") @db.Timestamptz(6)
+  deliveryArea            String?                @map("delivery_area")
+  createdAt               DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
   conversations           conversations?
   messages                Message[]
   orders                  Order[]
   chatSessions            ChatSession[]
-  contextSummary          String?        @map("context_summary")
-  contextSummaryUpdatedAt DateTime?      @map("context_summary_updated_at") @db.Timestamptz(6)
+  favorites               CustomerFavorite[]
+  shoppingLists           CustomerShoppingList[]
+  addresses               CustomerAddress[]
+  notifications           CustomerNotification[]
+  contextSummary          String?                @map("context_summary")
+  contextSummaryUpdatedAt DateTime?              @map("context_summary_updated_at") @db.Timestamptz(6)
 
   @@map("customers")
 }
 
+model CustomerFavorite {
+  id         String   @id @default(uuid()) @db.Uuid
+  customerId String   @map("customer_id") @db.Uuid
+  productId  String   @map("product_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, productId])
+  @@index([customerId])
+  @@map("customer_favorites")
+}
+
+model CustomerShoppingList {
+  id         String   @id @default(uuid()) @db.Uuid
+  customerId String   @map("customer_id") @db.Uuid
+  name       String
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer Customer                   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  items    CustomerShoppingListItem[]
+
+  @@index([customerId])
+  @@map("customer_shopping_lists")
+}
+
+model CustomerShoppingListItem {
+  id                  String  @id @default(uuid()) @db.Uuid
+  listId              String  @map("list_id") @db.Uuid
+  productId           String? @map("product_id") @db.Uuid
+  productNameSnapshot String  @map("product_name_snapshot")
+  unitSnapshot        String  @map("unit_snapshot")
+  priceSnapshot       Decimal @map("price_snapshot") @db.Decimal(12, 2)
+  imageUrlSnapshot    String? @map("image_url_snapshot")
+  quantity            Int     @default(1)
+
+  list    CustomerShoppingList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  product Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([listId])
+  @@map("customer_shopping_list_items")
+}
+
+enum NotificationType {
+  order
+  promotion
+  profile
+}
+
+model CustomerNotification {
+  id         String           @id @default(uuid()) @db.Uuid
+  customerId String           @map("customer_id") @db.Uuid
+  type       NotificationType
+  title      String
+  message    String
+  isRead     Boolean          @default(false) @map("is_read")
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("customer_notifications")
+}
+
+model CustomerAddress {
+  id         String   @id @default(uuid()) @db.Uuid
+  customerId String   @map("customer_id") @db.Uuid
+  label      String?
+  address    String
+  landmark   String?
+  isDefault  Boolean  @default(false) @map("is_default")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("customer_addresses")
+}
+
+enum PromoDiscountType {
+  percent
+  fixed
+}
+
+model PromoCode {
+  id               String            @id @default(uuid()) @db.Uuid
+  code             String            @unique
+  discountType     PromoDiscountType @map("discount_type")
+  discountValue    Decimal           @map("discount_value") @db.Decimal(12, 2)
+  minOrderValue    Decimal?          @map("min_order_value") @db.Decimal(12, 2)
+  maxRedemptions   Int?              @map("max_redemptions")
+  perCustomerLimit Int               @default(1) @map("per_customer_limit")
+  expiresAt        DateTime?         @map("expires_at") @db.Timestamptz(6)
+  isActive         Boolean           @default(true) @map("is_active")
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  orders Order[]
+
+  @@map("promo_codes")
+}
+
 model Product {
-  id           String      @id @default(uuid()) @db.Uuid
-  name         String
-  unit         String
-  currentPrice Decimal     @map("current_price") @db.Decimal(12, 2)
-  isAvailable  Boolean     @default(true) @map("is_available")
-  category     String?
-  description  String?
-  imageUrl     String?     @map("image_url")
-  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
-  orderItems   OrderItem[]
+  id                String                     @id @default(uuid()) @db.Uuid
+  name              String
+  unit              String
+  currentPrice      Decimal                    @map("current_price") @db.Decimal(12, 2)
+  isAvailable       Boolean                    @default(true) @map("is_available")
+  category          String?
+  description       String?
+  imageUrl          String?                    @map("image_url")
+  createdAt         DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  orderItems        OrderItem[]
+  favoritedBy       CustomerFavorite[]
+  shoppingListItems CustomerShoppingListItem[]
 
   @@map("products")
 }
 
 model Order {
-  id                String        @id @default(uuid()) @db.Uuid
-  customerId        String        @map("customer_id") @db.Uuid
-  channel           Channel       @default(whatsapp)
-  status            OrderStatus   @default(pending)
-  paymentStatus     PaymentStatus @default(unpaid) @map("payment_status")
-  total             Decimal       @default(0) @db.Decimal(12, 2)
-  customerNotes     String?       @map("customer_notes")
-  paystackReference String?       @unique @map("paystack_reference")
-  paymentUrl        String?       @map("payment_url")
-  paidAt            DateTime?     @map("paid_at") @db.Timestamptz(6)
-  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                String            @id @default(uuid()) @db.Uuid
+  customerId        String            @map("customer_id") @db.Uuid
+  channel           Channel           @default(whatsapp)
+  status            OrderStatus       @default(pending)
+  paymentStatus     PaymentStatus     @default(unpaid) @map("payment_status")
+  total             Decimal           @default(0) @db.Decimal(12, 2)
+  customerNotes     String?           @map("customer_notes")
+  paystackReference String?           @unique @map("paystack_reference")
+  paymentUrl        String?           @map("payment_url")
+  paidAt            DateTime?         @map("paid_at") @db.Timestamptz(6)
+  promoCodeId       String?           @map("promo_code_id") @db.Uuid
+  discountAmount    Decimal           @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  cancelReason      String?           @map("cancel_reason")
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
   items             OrderItem[]
   assignments       OrderAssignment[]
-  customer          Customer      @relation(fields: [customerId], references: [id])
+  customer          Customer          @relation(fields: [customerId], references: [id])
+  promoCode         PromoCode?        @relation(fields: [promoCodeId], references: [id])
 
   @@index([customerId])
   @@index([status])
   @@index([paymentStatus])
+  @@index([promoCodeId])
   @@map("orders")
 }
 
 // Add this model after the Order model
 model OrderAssignment {
-  id          String            @id @default(uuid()) @db.Uuid
-  orderId     String            @map("order_id") @db.Uuid
-  adminId     String            @map("admin_id") @db.Uuid
-  assignedAt  DateTime          @default(now()) @map("assigned_at") @db.Timestamptz(6)
-  completedAt DateTime?         @map("completed_at") @db.Timestamptz(6)
+  id          String           @id @default(uuid()) @db.Uuid
+  orderId     String           @map("order_id") @db.Uuid
+  adminId     String           @map("admin_id") @db.Uuid
+  assignedAt  DateTime         @default(now()) @map("assigned_at") @db.Timestamptz(6)
+  completedAt DateTime?        @map("completed_at") @db.Timestamptz(6)
   notes       String?
-  status      AssignmentStatus  @default(pending)
+  status      AssignmentStatus @default(pending)
 
-  order       Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  admin       Admin             @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  admin Admin @relation(fields: [adminId], references: [id], onDelete: Cascade)
 
   @@index([orderId])
   @@index([adminId])
@@ -180,19 +325,19 @@ model conversations {
 /// Per-session message grouping for AI context + a rolling customer summary.
 /// Distinct from `conversations` above, which is a bot/human handoff toggle.
 model ChatSession {
-  id                   String            @id @default(uuid()) @db.Uuid
-  customerId           String            @map("customer_id") @db.Uuid
-  customer             Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  status               ChatSessionStatus @default(active)
-  startedAt            DateTime          @default(now()) @map("started_at") @db.Timestamptz(6)
-  lastActivityAt       DateTime          @default(now()) @map("last_activity_at") @db.Timestamptz(6)
-  closedAt             DateTime?         @map("closed_at") @db.Timestamptz(6)
-  summary              String?
-   pendingItems          Json?     
-  draftItems           Json?             @map("draft_items")
-  draftDeliveryAddress String?           @map("draft_delivery_address")
-    draftDeliveryAddressMeta Json?   
-  messages             Message[]
+  id                       String            @id @default(uuid()) @db.Uuid
+  customerId               String            @map("customer_id") @db.Uuid
+  customer                 Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  status                   ChatSessionStatus @default(active)
+  startedAt                DateTime          @default(now()) @map("started_at") @db.Timestamptz(6)
+  lastActivityAt           DateTime          @default(now()) @map("last_activity_at") @db.Timestamptz(6)
+  closedAt                 DateTime?         @map("closed_at") @db.Timestamptz(6)
+  summary                  String?
+  pendingItems             Json?
+  draftItems               Json?             @map("draft_items")
+  draftDeliveryAddress     String?           @map("draft_delivery_address")
+  draftDeliveryAddressMeta Json?
+  messages                 Message[]
 
   @@index([customerId, status])
   @@index([lastActivityAt])
