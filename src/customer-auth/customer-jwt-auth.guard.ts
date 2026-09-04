@@ -5,12 +5,11 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AdminRole } from '@prisma/client';
-import { verifyToken } from './crypto.util';
-import { AuthAdmin } from './current-admin.decorator';
+import { verifyToken } from '../auth/crypto.util';
+import { AuthCustomer } from './current-customer.decorator';
 
 @Injectable()
-export class JwtAuthGuard implements CanActivate {
+export class CustomerJwtAuthGuard implements CanActivate {
   constructor(private readonly config: ConfigService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -26,22 +25,17 @@ export class JwtAuthGuard implements CanActivate {
         token,
         this.config.get<string>('jwt.secret') || 'dev-only-change-me',
       );
-      if (payload.type !== 'access' || payload.kind === 'customer') {
+      if (payload.type !== 'access' || payload.kind !== 'customer') {
         throw new UnauthorizedException('Invalid or missing token');
       }
 
-      // Use claims from the token — avoids a Supabase round-trip on every request.
-      const admin: AuthAdmin = {
+      const customer: AuthCustomer = {
         id: payload.sub,
-        email: payload.email ?? '',
+        phone: payload.phone ?? '',
         name: payload.name ?? null,
-        phone: payload.phone ?? null,
-        role: (payload.role as AdminRole) || AdminRole.admin,
-        avatarUrl: payload.avatarUrl ?? null,
-        createdAt: new Date(0),
       };
 
-      request.user = admin;
+      request.user = customer;
       return true;
     } catch (err) {
       if (err instanceof UnauthorizedException) throw err;

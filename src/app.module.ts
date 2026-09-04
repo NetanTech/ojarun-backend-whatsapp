@@ -9,6 +9,8 @@ import { EmailModule } from './email/email.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { AuthModule } from './auth/auth.module';
+import { CustomerAuthModule } from './customer-auth/customer-auth.module';
+import { SmsModule } from './sms/sms.module';
 import { ProductsModule } from './products/products.module';
 import { OrdersModule } from './orders/orders.module';
 import { UploadModule } from './upload/upload.module';
@@ -16,6 +18,11 @@ import { CustomersModule } from './customers/customers.module';
 import { AdminsModule } from './admins/admins.module';
 import { InboxModule } from './inbox/inbox.module';
 import { PaystackModule } from './paystack/paystack.module';
+import { FavoritesModule } from './favorites/favorites.module';
+import { ShoppingListsModule } from './shopping-lists/shopping-lists.module';
+import { PromoCodesModule } from './promo-codes/promo-codes.module';
+import { AddressesModule } from './addresses/addresses.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -26,16 +33,23 @@ import { PaystackModule } from './paystack/paystack.module';
     }),
     PrismaModule,
     EmailModule,
+    SmsModule,
     WhatsappModule,
     PaystackModule,
     WebhooksModule,
     AuthModule,
+    CustomerAuthModule,
     ProductsModule,
     OrdersModule,
     UploadModule,
     CustomersModule,
     AdminsModule,
     InboxModule,
+    FavoritesModule,
+    ShoppingListsModule,
+    PromoCodesModule,
+    AddressesModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}
