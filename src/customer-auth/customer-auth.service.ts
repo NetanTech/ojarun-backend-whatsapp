@@ -154,12 +154,11 @@ export class CustomerAuthService {
     const email = dto.email.trim().toLowerCase();
     const customer = await this.prisma.customer.findUnique({ where: { email } });
 
-    const response = {
-      message: 'If an account exists for that email, a reset code has been sent.',
-    };
     if (!customer?.passwordHash) {
-      return response;
+      throw new NotFoundException('No account found for this email.');
     }
+
+    const response = { message: 'A reset code has been sent to your email.' };
 
     const code = this.generateOtp();
     const codeHash = await hashOtp(code);
