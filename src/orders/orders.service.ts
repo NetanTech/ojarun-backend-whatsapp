@@ -13,6 +13,7 @@ import { PaystackService } from '../paystack/paystack.service';
 import { AdminNotificationService } from '../admins/admin-notification.service';
 import { PromoCodesService } from '../promo-codes/promo-codes.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RewardsService } from '../rewards/rewards.service';
 import {
   CreateOrderDto,
   ListOrdersQueryDto,
@@ -37,6 +38,7 @@ export class OrdersService {
     private readonly adminNotification: AdminNotificationService,
     private readonly promoCodes: PromoCodesService,
     private readonly notifications: NotificationsService,
+    private readonly rewards: RewardsService,
   ) {}
 
   /** Creates a real order from the web checkout for a logged-in customer. */
@@ -262,6 +264,7 @@ export class OrdersService {
       id.slice(0, 8).toUpperCase(),
       OrderStatus.delivered,
     );
+    await this.rewards.awardForDeliveredOrder(id);
     return this.serializeForCustomer(updated);
   }
 
@@ -404,6 +407,9 @@ export class OrdersService {
       order.id.slice(0, 8).toUpperCase(),
       order.status,
     );
+    if (order.status === OrderStatus.delivered) {
+      await this.rewards.awardForDeliveredOrder(order.id);
+    }
     return this.serializeDetail(order);
   }
 

@@ -23,6 +23,7 @@ import { ShoppingListsModule } from './shopping-lists/shopping-lists.module';
 import { PromoCodesModule } from './promo-codes/promo-codes.module';
 import { AddressesModule } from './addresses/addresses.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { RewardsModule } from './rewards/rewards.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     PromoCodesModule,
     AddressesModule,
     NotificationsModule,
+    RewardsModule,
   ],
 })
 export class AppModule {}

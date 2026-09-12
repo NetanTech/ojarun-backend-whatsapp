@@ -10,6 +10,8 @@ import { ConfigService } from '@nestjs/config';
 import { Customer } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
+import { RewardsService } from '../rewards/rewards.service';
+import { generateUniqueReferralCode } from '../common/referral-code.util';
 import {
   RegisterCustomerDto,
   LoginCustomerDto,
@@ -41,6 +43,7 @@ export class CustomerAuthService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly email: EmailService,
+    private readonly rewards: RewardsService,
   ) {}
 
   async register(dto: RegisterCustomerDto) {
@@ -63,6 +66,17 @@ export class CustomerAuthService {
 
     const passwordHash = await hashPassword(dto.password);
 
+    let referredById: string | null = null;
+    if (dto.referralCode?.trim()) {
+      const referrer = await this.prisma.customer.findUnique({
+        where: { referralCode: dto.referralCode.trim().toUpperCase() },
+        select: { id: true },
+      });
+      if (referrer && referrer.id !== existingByPhone?.id) {
+        referredById = referrer.id;
+      }
+    }
+
     if (existingByPhone) {
       // A Customer row can already exist with no password if they've only
       // ever messaged the WhatsApp bot — treat this as completing signup.
@@ -74,6 +88,7 @@ export class CustomerAuthService {
           passwordHash,
           deliveryArea: dto.deliveryArea.trim(),
           emailVerifiedAt: null,
+          ...(referredById && !existingByPhone.referredById ? { referredById } : {}),
         },
       });
     } else {
@@ -84,6 +99,8 @@ export class CustomerAuthService {
           email,
           passwordHash,
           deliveryArea: dto.deliveryArea.trim(),
+          referralCode: await generateUniqueReferralCode(this.prisma),
+          referredById,
         },
       });
     }
@@ -123,10 +140,20 @@ export class CustomerAuthService {
       data: { usedAt: new Date() },
     });
 
+    const existing = await this.prisma.customer.findUnique({ where: { email } });
+    if (!existing) {
+      throw new BadRequestException('Invalid or expired code');
+    }
+    const isFirstVerification = !existing.emailVerifiedAt;
+
     const customer = await this.prisma.customer.update({
       where: { email },
       data: { emailVerifiedAt: new Date() },
     });
+
+    if (isFirstVerification && customer.referredById) {
+      await this.rewards.awardReferralBonuses(customer.id, customer.referredById);
+    }
 
     const accessToken = this.signAccessToken(customer);
     return { accessToken, customer: this.toPublicCustomer(customer) };

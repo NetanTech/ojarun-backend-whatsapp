@@ -1,4 +1,4 @@
-import { IsString, IsEmail, MinLength, MaxLength, Matches } from 'class-validator';
+import { IsString, IsEmail, IsOptional, MinLength, MaxLength, Matches } from 'class-validator';
 
 const PHONE_PATTERN = /^[+]?[\d\s()-]{7,20}$/;
 const PASSWORD_PATTERN = /^(?=.*[A-Za-z])(?=.*\d).+$/;
@@ -27,6 +27,11 @@ export class RegisterCustomerDto {
   @MinLength(2)
   @MaxLength(200)
   deliveryArea!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  referralCode?: string;
 }
 
 export class LoginCustomerDto {
