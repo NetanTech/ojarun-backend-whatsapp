@@ -98,6 +98,7 @@ model Customer {
   referredBy              Customer?              @relation("Referrals", fields: [referredById], references: [id])
   referrals               Customer[]             @relation("Referrals")
   rewardTransactions      RewardTransaction[]
+  reviews                 OrderReview[]
 
   @@map("customers")
 }
@@ -246,12 +247,32 @@ model Order {
   customer           Customer          @relation(fields: [customerId], references: [id])
   promoCode          PromoCode?        @relation(fields: [promoCodeId], references: [id])
   rewardTransactions RewardTransaction[]
+  review             OrderReview?
 
   @@index([customerId])
   @@index([status])
   @@index([paymentStatus])
   @@index([promoCodeId])
   @@map("orders")
+}
+
+model OrderReview {
+  id             String   @id @default(uuid()) @db.Uuid
+  orderId        String   @unique @map("order_id") @db.Uuid
+  customerId     String   @map("customer_id") @db.Uuid
+  overallRating  Int      @map("overall_rating")
+  qualityRating  Int      @map("quality_rating")
+  deliveryRating Int      @map("delivery_rating")
+  comment        String?
+  photoUrls      String[] @default([]) @map("photo_urls")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("order_reviews")
 }
 
 // Add this model after the Order model
