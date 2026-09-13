@@ -79,6 +79,7 @@ model Customer {
   passwordHash            String?                @map("password_hash")
   emailVerifiedAt         DateTime?              @map("email_verified_at") @db.Timestamptz(6)
   deliveryArea            String?                @map("delivery_area")
+  deactivatedAt           DateTime?              @map("deactivated_at") @db.Timestamptz(6)
   createdAt               DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt               DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
   conversations           conversations?

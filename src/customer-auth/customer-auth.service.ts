@@ -20,6 +20,8 @@ import {
   ForgotCustomerPasswordDto,
   VerifyCustomerResetOtpDto,
   ResetCustomerPasswordDto,
+  UpdateCustomerProfileDto,
+  ChangeCustomerPasswordDto,
 } from './dto/customer-auth.dto';
 import {
   hashOtp,
@@ -173,6 +175,12 @@ export class CustomerAuthService {
       throw new UnauthorizedException('Invalid phone number or password');
     }
 
+    if (customer.deactivatedAt) {
+      throw new UnauthorizedException(
+        'This account has been deactivated. Contact support to reactivate it.',
+      );
+    }
+
     const accessToken = this.signAccessToken(customer);
     return { accessToken, customer: this.toPublicCustomer(customer) };
   }
@@ -268,6 +276,72 @@ export class CustomerAuthService {
       throw new UnauthorizedException('Customer not found');
     }
     return this.toPublicCustomer(customer);
+  }
+
+  async updateProfile(customerId: string, dto: UpdateCustomerProfileDto) {
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+    });
+    if (!customer) {
+      throw new UnauthorizedException('Customer not found');
+    }
+
+    const data: { name?: string; email?: string; deliveryArea?: string } = {};
+
+    if (dto.name !== undefined) {
+      data.name = dto.name.trim();
+    }
+
+    if (dto.email !== undefined) {
+      const email = dto.email.trim().toLowerCase();
+      if (email !== customer.email) {
+        const existing = await this.prisma.customer.findUnique({ where: { email } });
+        if (existing && existing.id !== customerId) {
+          throw new ConflictException('An account with this email already exists.');
+        }
+        data.email = email;
+      }
+    }
+
+    if (dto.deliveryArea !== undefined) {
+      data.deliveryArea = dto.deliveryArea.trim();
+    }
+
+    const updated = await this.prisma.customer.update({
+      where: { id: customerId },
+      data,
+    });
+    return this.toPublicCustomer(updated);
+  }
+
+  async changePassword(customerId: string, dto: ChangeCustomerPasswordDto) {
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+    });
+    if (!customer?.passwordHash) {
+      throw new UnauthorizedException('Customer not found');
+    }
+
+    const ok = await verifyPassword(dto.currentPassword, customer.passwordHash);
+    if (!ok) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    const passwordHash = await hashPassword(dto.newPassword);
+    await this.prisma.customer.update({
+      where: { id: customerId },
+      data: { passwordHash },
+    });
+
+    return { message: 'Password updated successfully' };
+  }
+
+  async deactivateAccount(customerId: string) {
+    await this.prisma.customer.update({
+      where: { id: customerId },
+      data: { deactivatedAt: new Date() },
+    });
+    return { message: 'Your account has been deactivated.' };
   }
 
   private async issueEmailOtp(email: string) {
