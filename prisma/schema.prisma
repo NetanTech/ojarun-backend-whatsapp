@@ -79,6 +79,7 @@ model Customer {
   passwordHash            String?                @map("password_hash")
   emailVerifiedAt         DateTime?              @map("email_verified_at") @db.Timestamptz(6)
   deliveryArea            String?                @map("delivery_area")
+  deactivatedAt           DateTime?              @map("deactivated_at") @db.Timestamptz(6)
   createdAt               DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt               DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
   conversations           conversations?
@@ -91,6 +92,13 @@ model Customer {
   notifications           CustomerNotification[]
   contextSummary          String?                @map("context_summary")
   contextSummaryUpdatedAt DateTime?              @map("context_summary_updated_at") @db.Timestamptz(6)
+  points                  Int                    @default(0)
+  referralCode            String                 @unique @map("referral_code")
+  referredById            String?                @map("referred_by_id") @db.Uuid
+  referredBy              Customer?              @relation("Referrals", fields: [referredById], references: [id])
+  referrals               Customer[]             @relation("Referrals")
+  rewardTransactions      RewardTransaction[]
+  reviews                 OrderReview[]
 
   @@map("customers")
 }
@@ -234,16 +242,37 @@ model Order {
   cancelReason      String?           @map("cancel_reason")
   createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
-  items             OrderItem[]
-  assignments       OrderAssignment[]
-  customer          Customer          @relation(fields: [customerId], references: [id])
-  promoCode         PromoCode?        @relation(fields: [promoCodeId], references: [id])
+  items              OrderItem[]
+  assignments        OrderAssignment[]
+  customer           Customer          @relation(fields: [customerId], references: [id])
+  promoCode          PromoCode?        @relation(fields: [promoCodeId], references: [id])
+  rewardTransactions RewardTransaction[]
+  review             OrderReview?
 
   @@index([customerId])
   @@index([status])
   @@index([paymentStatus])
   @@index([promoCodeId])
   @@map("orders")
+}
+
+model OrderReview {
+  id             String   @id @default(uuid()) @db.Uuid
+  orderId        String   @unique @map("order_id") @db.Uuid
+  customerId     String   @map("customer_id") @db.Uuid
+  overallRating  Int      @map("overall_rating")
+  qualityRating  Int      @map("quality_rating")
+  deliveryRating Int      @map("delivery_rating")
+  comment        String?
+  photoUrls      String[] @default([]) @map("photo_urls")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("order_reviews")
 }
 
 // Add this model after the Order model
@@ -286,6 +315,33 @@ model OrderItem {
 
   @@index([orderId])
   @@map("order_items")
+}
+
+enum RewardTransactionType {
+  earned
+  redeemed
+}
+
+enum RewardTransactionStatus {
+  successful
+  failed
+}
+
+model RewardTransaction {
+  id          String                   @id @default(uuid()) @db.Uuid
+  customerId  String                   @map("customer_id") @db.Uuid
+  orderId     String?                  @map("order_id") @db.Uuid
+  type        RewardTransactionType
+  points      Int
+  description String
+  status      RewardTransactionStatus  @default(successful)
+  createdAt   DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order    Order?   @relation(fields: [orderId], references: [id])
+
+  @@index([customerId, createdAt])
+  @@map("reward_transactions")
 }
 
 model Message {

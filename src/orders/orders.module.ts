@@ -9,6 +9,7 @@ import { OrdersService } from './orders.service';
 import { AdminNotificationService } from '../admins/admin-notification.service';
 import { PromoCodesModule } from '../promo-codes/promo-codes.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { RewardsModule } from '../rewards/rewards.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     WhatsappModule,
     PromoCodesModule,
     NotificationsModule,
+    RewardsModule,
   ],
   controllers: [
     OrdersController,

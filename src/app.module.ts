@@ -23,6 +23,9 @@ import { ShoppingListsModule } from './shopping-lists/shopping-lists.module';
 import { PromoCodesModule } from './promo-codes/promo-codes.module';
 import { AddressesModule } from './addresses/addresses.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { RewardsModule } from './rewards/rewards.module';
+import { CustomerChatModule } from './customer-chat/customer-chat.module';
+import { ReviewsModule } from './reviews/reviews.module';
 
 @Module({
   imports: [
@@ -50,6 +53,9 @@ import { NotificationsModule } from './notifications/notifications.module';
     PromoCodesModule,
     AddressesModule,
     NotificationsModule,
+    RewardsModule,
+    CustomerChatModule,
+    ReviewsModule,
   ],
 })
 export class AppModule {}

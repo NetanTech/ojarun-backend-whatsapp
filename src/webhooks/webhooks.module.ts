@@ -23,6 +23,6 @@ import { AdminNotificationService } from '../admins/admin-notification.service';
     AdminNotificationService,
     AddressValidationService,
   ],
-  exports: [AddressValidationService],
+  exports: [AddressValidationService, AiService],
 })
 export class WebhooksModule {}
