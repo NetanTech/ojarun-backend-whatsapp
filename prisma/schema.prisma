@@ -87,6 +87,7 @@ model Customer {
   orders                  Order[]
   chatSessions            ChatSession[]
   favorites               CustomerFavorite[]
+  mealFavorites           MealFavorite[]
   cartItems               CartItem[]
   shoppingLists           CustomerShoppingList[]
   addresses               CustomerAddress[]
@@ -116,6 +117,27 @@ model CustomerFavorite {
   @@unique([customerId, productId])
   @@index([customerId])
   @@map("customer_favorites")
+}
+
+/// Meals (currently a static/mock catalog, not real Product rows) are favorited
+/// by their string id with a display snapshot, since there's no backend Meal
+/// entity to join against yet.
+model MealFavorite {
+  id                String   @id @default(uuid()) @db.Uuid
+  customerId        String   @map("customer_id") @db.Uuid
+  mealId            String   @map("meal_id")
+  nameSnapshot      String   @map("name_snapshot")
+  imageUrlSnapshot  String?  @map("image_url_snapshot")
+  servingsSnapshot  String   @map("servings_snapshot")
+  totalPriceSnapshot Decimal @map("total_price_snapshot") @db.Decimal(12, 2)
+  ingredientCountSnapshot Int @map("ingredient_count_snapshot")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, mealId])
+  @@index([customerId])
+  @@map("meal_favorites")
 }
 
 model CartItem {
