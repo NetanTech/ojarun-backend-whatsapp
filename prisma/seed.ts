@@ -12,16 +12,17 @@ const botResponses = [
     body:
       `Aba {{name}}! 👋 Welcome to OjaRun — we run your market errands for you here in Ibadan.\n\n` +
       `Just drop your shopping list right here (e.g. "2kg tomatoes, 1 bag rice") and we go sort you out sharp-sharp! 🛍️\n\n` +
-      `Reply *MENU* to see wetin we fit help you with, or *HELP* if you need guidance.`,
+      `Reply *BROWSE* to see today's products and live prices, *MENU* for options, or *HELP* if you need guidance.`,
   },
   {
     key: 'menu',
     body:
       `Wetin dey do 🛒\n\n` +
+      `🛍️ *BROWSE* — see today's products with live prices\n` +
       `🛍️ *ORDER* — start a new market order\n` +
       `📦 Just type your shopping list directly, e.g. "1kg beef, 2 tubers yam"\n` +
       `📍 *LOCATION* — see where we dey deliver\n` +
-      `💰 *PRICE* — ask about pricing\n` +
+      `💰 *HOW MUCH rice* — check a live price\n` +
       `❓ *HELP* — how OjaRun works\n\n` +
       `Wetin you wan do today?`,
   },
@@ -37,10 +38,11 @@ const botResponses = [
     key: 'help',
     body:
       `No wahala, here's how OjaRun works 🙏\n\n` +
-      `1️⃣ Send us your market list (items + quantities)\n` +
-      `2️⃣ We confirm your delivery address and time\n` +
-      `3️⃣ Our shoppers go buy the items for you for Ibadan market\n` +
-      `4️⃣ We deliver to you and send your pricing breakdown\n\n` +
+      `1️⃣ Reply *BROWSE* to see today's products and live prices\n` +
+      `2️⃣ Send us your market list (items + quantities)\n` +
+      `3️⃣ We confirm your delivery address and time\n` +
+      `4️⃣ Our shoppers go buy the items for you for Ibadan market\n` +
+      `5️⃣ We deliver to you and send your pricing breakdown\n\n` +
       `Reply *MENU* anytime to see your options, or just start typing your list.`,
   },
   {
@@ -52,8 +54,9 @@ const botResponses = [
   {
     key: 'pricing',
     body:
-      `Pricing dey depend on wetin dey market that day 💰\n\n` +
-      `Send us your list and we go get the current prices for you once our shoppers dey buy — no fixed price list since market price dey change daily. No hidden charges, we go show you everything before delivery.`,
+      `Pricing follows today's market 💰\n\n` +
+      `Reply *BROWSE* to see the live product list, or ask *HOW MUCH rice* (swap in any item).\n\n` +
+      `We update prices as we restock. When you order, we confirm the amount before delivery — no hidden charges.`,
   },
 ];
 
