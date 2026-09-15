@@ -25,8 +25,17 @@ async function bootstrap() {
 
   const config = app.get(ConfigService);
   const corsOrigin = config.get<string>('cors.origin') || 'http://localhost:3001';
+  const webAppUrl = config.get<string>('webAppUrl');
+  const isProd = (process.env.NODE_ENV ?? 'development') === 'production';
+  const origins = [
+    ...corsOrigin.split(',').map((o) => o.trim()),
+    webAppUrl?.trim(),
+    !isProd ? 'http://localhost:3000' : '',
+  ].filter((origin, index, all): origin is string =>
+    Boolean(origin) && all.indexOf(origin) === index,
+  );
   app.enableCors({
-    origin: corsOrigin.split(',').map((o) => o.trim()),
+    origin: origins,
     credentials: true,
   });
 
