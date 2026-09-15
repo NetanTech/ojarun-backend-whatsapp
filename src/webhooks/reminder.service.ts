@@ -31,7 +31,7 @@ export class ReminderService {
         order.phone,
         `Hey! 👋 Looks like you didn't finish your OjaRun order.\n\n` +
         `Just send us your items + delivery address and we'll sort it out quickly! 🛒\n\n` +
-        `Reply *ORDER* to continue or *MENU* to browse.`,
+        `Reply *ORDER* to continue, *BROWSE* to see today's products, or *MENU* for options.`,
       );
 
       await this.prisma.pendingOrder.update({

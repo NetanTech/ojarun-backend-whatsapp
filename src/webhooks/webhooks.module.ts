@@ -7,7 +7,9 @@ import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { EmailModule } from '../email/email.module';
 import { PaystackModule } from '../paystack/paystack.module';
+import { ProductsModule } from '../products/products.module';
 import { AdminNotificationService } from '../admins/admin-notification.service';
+import { CatalogBrowseService } from './catalog-browse.service';
 
 @Module({
   imports: [
@@ -15,6 +17,7 @@ import { AdminNotificationService } from '../admins/admin-notification.service';
     PrismaModule,
     EmailModule,
     PaystackModule,
+    ProductsModule,
   ],
   controllers: [WebhooksController],
   providers: [
@@ -22,6 +25,7 @@ import { AdminNotificationService } from '../admins/admin-notification.service';
     ConversationService,  
     AdminNotificationService,
     AddressValidationService,
+    CatalogBrowseService,
   ],
   exports: [AddressValidationService, AiService],
 })

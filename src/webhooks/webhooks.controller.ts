@@ -26,6 +26,8 @@ import { EmailService } from "../email/email.service";
 import { PaystackService } from "../paystack/paystack.service";
 import { AddressValidationService } from "./address-validation.service";
 import { AdminNotificationService } from "../admins/admin-notification.service";
+import { CatalogBrowseService } from "./catalog-browse.service";
+import { parseBrowseIntent, BrowseIntent } from "./catalog-browse.util";
 import {
   parseBudgetNaira,
   applyBudgetHintsFromMessage,
@@ -282,7 +284,7 @@ function looksLikeMetaOrComplaint(text: string): boolean {
 }
 
 const ENGLISH_GREETING =
-  "Hi — welcome to OjaRun. I run market errands in Ibadan. Send your shopping list, or tell me what you'd like to buy.";
+  "Hi — welcome to OjaRun. I run market errands in Ibadan. Reply *BROWSE* to see today's products and live prices, or send your shopping list.";
 
 const LANGUAGE_EN_ACK =
   "Got it — I'll speak English from here on. What would you like to buy?";
@@ -527,6 +529,7 @@ export class WebhooksController {
     private readonly paystack: PaystackService,
     private readonly addressValidation: AddressValidationService,
     private readonly adminNotification: AdminNotificationService,
+    private readonly catalogBrowse: CatalogBrowseService,
   ) {}
 
   @Get()
@@ -606,6 +609,16 @@ export class WebhooksController {
     const bodyText = msg.type === "text" ? (msg.text?.body ?? null) : null;
 
     let processedText = bodyText;
+    if (msg.type === "interactive") {
+      const listReply = msg.interactive?.list_reply;
+      const buttonReply = msg.interactive?.button_reply;
+      processedText =
+        listReply?.id ||
+        buttonReply?.id ||
+        listReply?.title ||
+        buttonReply?.title ||
+        null;
+    }
     if (bodyText && bodyText.includes("\n")) {
       const lines = bodyText.split("\n").filter((line: string) => line.trim());
       processedText = lines.join(" ");
@@ -718,6 +731,19 @@ export class WebhooksController {
         await this.conversations.touch(conversation.id);
         return;
       }
+    }
+
+    const browseIntent = processedText
+      ? parseBrowseIntent(processedText)
+      : null;
+    if (browseIntent) {
+      await this.replyWithCatalog(
+        customer.id,
+        conversation.id,
+        whatsappNumber,
+        browseIntent,
+      );
+      return;
     }
 
     const pendingItems = (
@@ -859,6 +885,11 @@ export class WebhooksController {
     staticMessageBody = customer.name
       ? staticMessageBody.replace(/\{\{name\}\}/g, customer.name)
       : staticMessageBody.replace(/,?\s*\{\{name\}\}/g, "");
+
+    if (replyKey === "menu") {
+      staticMessageBody +=
+        `\n🛍️ *BROWSE* — see today's products with live prices`;
+    }
 
     if (replyKey === "order_prompt") {
       const { window, day } = getDeliveryWindow();
@@ -1893,5 +1924,85 @@ export class WebhooksController {
       return "pricing";
 
     return "default";
+  }
+
+  private async replyWithCatalog(
+    customerId: string,
+    conversationId: string,
+    whatsappNumber: string,
+    intent: BrowseIntent,
+  ): Promise<void> {
+    const reply = await this.catalogBrowse.buildReply(intent);
+
+    if (reply.list) {
+      await this.sendListAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        reply.list.body,
+        reply.list.button,
+        reply.list.sections,
+        { header: reply.list.header, footer: reply.list.footer },
+      );
+      return;
+    }
+
+    for (const text of reply.texts) {
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        text,
+      );
+    }
+  }
+
+  private async sendListAndLog(
+    customerId: string,
+    conversationId: string,
+    whatsappNumber: string,
+    body: string,
+    button: string,
+    sections: Array<{
+      title?: string;
+      rows: Array<{ id: string; title: string; description?: string }>;
+    }>,
+    options?: { header?: string; footer?: string },
+  ): Promise<void> {
+    try {
+      const sentPayload = await this.whatsapp.sendList(
+        whatsappNumber,
+        body,
+        button,
+        sections,
+        options,
+      );
+      const rowSummary = sections
+        .flatMap((section) =>
+          section.rows.map((row) =>
+            row.description
+              ? `• ${row.title} — ${row.description}`
+              : `• ${row.title}`,
+          ),
+        )
+        .join("\n");
+      const loggedBody = `${body}\n\n${rowSummary}`;
+      await this.prisma.message.create({
+        data: {
+          customerId,
+          sessionId: conversationId,
+          whatsappMessageId: sentPayload.wamid!,
+          direction: MessageDirection.outbound,
+          body: loggedBody,
+          raw: { sentPayload } as Prisma.InputJsonValue,
+        },
+      });
+      await this.conversations.touch(conversationId);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send/log catalog list to ${whatsappNumber}`,
+        error as Error,
+      );
+    }
   }
 }

@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Post } from '@nestjs/common';
 import { AiService, AiChatResult } from '../webhooks/ai.service';
 import { SendChatMessageDto } from './dto/customer-chat.dto';
 
@@ -9,6 +9,7 @@ export class CustomerChatController {
   constructor(private readonly ai: AiService) {}
 
   @Post('message')
+  @HttpCode(200)
   async sendMessage(@Body() dto: SendChatMessageDto): Promise<AiChatResult> {
     const history = (dto.history ?? []).slice(-MAX_HISTORY_MESSAGES);
 

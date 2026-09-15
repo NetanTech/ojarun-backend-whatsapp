@@ -14,6 +14,7 @@ export class ChatHistoryMessageDto {
   role!: 'user' | 'assistant';
 
   @IsString()
+  @MinLength(1)
   @MaxLength(4000)
   content!: string;
 }
@@ -21,7 +22,7 @@ export class ChatHistoryMessageDto {
 export class SendChatMessageDto {
   @IsString()
   @MinLength(1)
-  @MaxLength(2000)
+  @MaxLength(4000)
   message!: string;
 
   @IsOptional()

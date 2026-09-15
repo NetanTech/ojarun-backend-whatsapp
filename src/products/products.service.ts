@@ -34,15 +34,30 @@ export class ProductsService {
   /** Storefront browsing — no auth required, only ever shows available products. */
   async findAllPublic(search?: string, category?: string) {
     const where: Prisma.ProductWhereInput = { isAvailable: true };
+    const and: Prisma.ProductWhereInput[] = [];
     if (search?.trim()) {
-      where.OR = [
-        { name: { contains: search.trim(), mode: 'insensitive' } },
-        { category: { contains: search.trim(), mode: 'insensitive' } },
-      ];
+      and.push({
+        OR: [
+          { name: { contains: search.trim(), mode: 'insensitive' } },
+          { category: { contains: search.trim(), mode: 'insensitive' } },
+        ],
+      });
     }
     if (category?.trim() && category.trim().toLowerCase() !== 'all') {
-      where.category = { equals: category.trim(), mode: 'insensitive' };
+      const cat = category.trim();
+      if (cat.toLowerCase() === 'other') {
+        and.push({
+          OR: [
+            { category: null },
+            { category: '' },
+            { category: { equals: 'Other', mode: 'insensitive' } },
+          ],
+        });
+      } else {
+        and.push({ category: { equals: cat, mode: 'insensitive' } });
+      }
     }
+    if (and.length) where.AND = and;
 
     const products = await this.prisma.product.findMany({
       where,
