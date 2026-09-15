@@ -91,63 +91,6 @@ export class WhatsappService {
     );
   }
 
-  /**
-   * Interactive list (tap-to-choose). Falls back to plain text if Meta
-   * rejects the payload. Max 10 rows across all sections.
-   */
-  async sendList(
-    to: string,
-    body: string,
-    button: string,
-    sections: Array<{
-      title?: string;
-      rows: Array<{ id: string; title: string; description?: string }>;
-    }>,
-    options?: { header?: string; footer?: string },
-  ): Promise<{ ok: boolean; wamid: string | null; error?: string }> {
-    const interactive = await this.sendPayload(to, {
-      type: 'interactive',
-      interactive: {
-        type: 'list',
-        ...(options?.header
-          ? { header: { type: 'text', text: options.header.slice(0, 60) } }
-          : {}),
-        body: { text: body.slice(0, 1024) },
-        ...(options?.footer
-          ? { footer: { text: options.footer.slice(0, 60) } }
-          : {}),
-        action: {
-          button: button.slice(0, 20),
-          sections: sections.map((section) => ({
-            ...(section.title ? { title: section.title.slice(0, 24) } : {}),
-            rows: section.rows.map((row) => ({
-              id: row.id.slice(0, 200),
-              title: row.title.slice(0, 24),
-              ...(row.description
-                ? { description: row.description.slice(0, 72) }
-                : {}),
-            })),
-          })),
-        },
-      },
-    });
-
-    if (interactive.ok) return interactive;
-
-    this.logger.warn(
-      `List send failed (${interactive.error}); falling back to text`,
-    );
-    const lines = sections.flatMap((section) => [
-      section.title ? `*${section.title}*` : '',
-      ...section.rows.map((row) =>
-        row.description
-          ? `• ${row.title} — ${row.description}`
-          : `• ${row.title}`,
-      ),
-    ]);
-    return this.sendText(to, `${body}\n\n${lines.filter(Boolean).join('\n')}`);
-  }
-
   private async sendPayload(
     to: string,
     payload: Record<string, unknown>,

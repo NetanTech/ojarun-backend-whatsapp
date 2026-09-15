@@ -26,8 +26,6 @@ import { EmailService } from "../email/email.service";
 import { PaystackService } from "../paystack/paystack.service";
 import { AddressValidationService } from "./address-validation.service";
 import { AdminNotificationService } from "../admins/admin-notification.service";
-import { CatalogBrowseService } from "./catalog-browse.service";
-import { parseBrowseIntent, BrowseIntent } from "./catalog-browse.util";
 import {
   parseBudgetNaira,
   applyBudgetHintsFromMessage,
@@ -35,6 +33,11 @@ import {
   extractPlainItemNames,
 } from "./budget.util";
 import { matchCatalogProduct } from "./product-match.util";
+import {
+  findLiveProduct,
+  formatNaira,
+  quoteQuantityPrompt,
+} from "./live-price.util";
 import { generateUniqueReferralCode } from "../common/referral-code.util";
 import { randomBytes } from "crypto";
 
@@ -68,6 +71,61 @@ function normalizeForConfirmCheck(text: string): string {
     .trim()
     .toUpperCase()
     .replace(/[.,!?'’]/g, "");
+}
+
+function looksLikeCancelRequest(text: string): boolean {
+  if (!text) return false;
+  const t = normalizeForConfirmCheck(text);
+  if (!t) return false;
+  if (/\b(DONT|DO NOT|NEVER)\b/.test(t) && /\bCANCEL\b/.test(t)) {
+    return false;
+  }
+
+  const exact = new Set([
+    "CANCEL",
+    "CANCEL ORDER",
+    "CANCEL THE ORDER",
+    "CANCEL MY ORDER",
+    "CANCEL AM",
+    "CANCEL IT",
+    "CANCEL THIS",
+    "CANCEL THIS ORDER",
+    "START OVER",
+    "START AGAIN",
+    "START FRESH",
+    "START AFRESH",
+    "START NEW",
+    "NEW ORDER",
+    "FRESH ORDER",
+    "RESET",
+    "RESET ORDER",
+    "CLEAR",
+    "CLEAR CART",
+    "CLEAR LIST",
+    "CLEAR ORDER",
+    "ABORT",
+    "NEVERMIND",
+    "NEVER MIND",
+    "FORGET IT",
+    "FORGET AM",
+    "SCRATCH THAT",
+    "I WAN CANCEL",
+    "I WANT TO CANCEL",
+    "I WANNA CANCEL",
+    "I WAN CANCEL ORDER",
+    "I WANT TO CANCEL THE ORDER",
+    "CANCEL ABEG",
+    "ABEG CANCEL",
+    "PLEASE CANCEL",
+    "CANCEL PLEASE",
+  ]);
+  if (exact.has(t)) return true;
+
+  return (
+    /^(PLEASE |ABEG )?(CANCEL|STOP) (MY |THE |THIS )?(ORDER|LIST|CART|AM)( ABEG| PLEASE)?$/.test(
+      t,
+    ) || /^(I )?(WAN|WANT TO|WANNA) (CANCEL|START OVER|START AGAIN)$/.test(t)
+  );
 }
 
 function looksLikeCartRequest(text: string): boolean {
@@ -284,7 +342,7 @@ function looksLikeMetaOrComplaint(text: string): boolean {
 }
 
 const ENGLISH_GREETING =
-  "Hi — welcome to OjaRun. I run market errands in Ibadan. Reply *BROWSE* to see today's products and live prices, or send your shopping list.";
+  "Hi — welcome to OjaRun. I run market errands in Ibadan. Send your shopping list and I'll quote today's prices as we go, or reply *CANCEL* to start over.";
 
 const LANGUAGE_EN_ACK =
   "Got it — I'll speak English from here on. What would you like to buy?";
@@ -345,7 +403,7 @@ function looksLikeOrderIntent(text: string): boolean {
   if (hasMarketItem) return true;
 
   const hasNumberWithItem: boolean =
-    /\b(\d+)\s*(?:kg|kilo|bag|bottle|pack|cups?|pieces?|tuber|tubers|congo|tray|trays)\s+\w+/i.test(
+    /\b(\d+)\s*(?:kg|kilo|bag|bottle|pack|cups?|pieces?|tuber|tubers|congo|tray|trays|derica|dirica)\s+\w+/i.test(
       t,
     );
   if (hasNumberWithItem) return true;
@@ -355,7 +413,7 @@ function looksLikeOrderIntent(text: string): boolean {
   if (hasMoneyWithItem && hasMarketItem) return true;
 
   return (
-    /\b(\d+\s*k\b|\d+\s*thousand|naira|₦|\bkg\b|\bbag\b|\bkilo\b|\bkilos\b)\b/.test(
+    /\b(\d+\s*k\b|\d+\s*thousand|naira|₦|\bkg\b|\bbag\b|\bkilo\b|\bkilos\b|\bderica\b|\bdirica\b)\b/.test(
       t,
     ) && hasMarketItem
   );
@@ -529,7 +587,6 @@ export class WebhooksController {
     private readonly paystack: PaystackService,
     private readonly addressValidation: AddressValidationService,
     private readonly adminNotification: AdminNotificationService,
-    private readonly catalogBrowse: CatalogBrowseService,
   ) {}
 
   @Get()
@@ -733,15 +790,11 @@ export class WebhooksController {
       }
     }
 
-    const browseIntent = processedText
-      ? parseBrowseIntent(processedText)
-      : null;
-    if (browseIntent) {
-      await this.replyWithCatalog(
+    if (processedText && looksLikeCancelRequest(processedText)) {
+      await this.handleCancelRequest(
         customer.id,
         conversation.id,
         whatsappNumber,
-        browseIntent,
       );
       return;
     }
@@ -808,9 +861,7 @@ export class WebhooksController {
           conversation.id,
         );
         let draftSummary = `Noted! Here's your list so far:\n\n`;
-        updatedDraft.items.forEach((item) => {
-          draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
-        });
+        draftSummary += await this.formatDraftItemLines(updatedDraft.items);
         draftSummary += `\n📍 *Delivery to:* ${addressInfo.formatted || addressInfo.address}`;
         if (addressInfo.neighborhood) {
           draftSummary += `\n📍 *Area:* ${addressInfo.neighborhood}`;
@@ -886,9 +937,21 @@ export class WebhooksController {
       ? staticMessageBody.replace(/\{\{name\}\}/g, customer.name)
       : staticMessageBody.replace(/,?\s*\{\{name\}\}/g, "");
 
+    staticMessageBody = staticMessageBody
+      .split("\n")
+      .filter((line) => !/\bBROWSE\b/i.test(line))
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n");
+
     if (replyKey === "menu") {
-      staticMessageBody +=
-        `\n🛍️ *BROWSE* — see today's products with live prices`;
+      staticMessageBody =
+        `Wetin dey do 🛒\n\n` +
+        `🛍️ *ORDER* — start a new market order\n` +
+        `❌ *CANCEL* — clear your list and start fresh\n` +
+        `📦 Type what you want (e.g. "rice") — I'll quote today's live price\n` +
+        `📍 *LOCATION* — see where we dey deliver\n` +
+        `❓ *HELP* — how OjaRun works\n\n` +
+        `Wetin you wan do today?`;
     }
 
     if (replyKey === "order_prompt") {
@@ -958,9 +1021,8 @@ export class WebhooksController {
         if (cleanItems.length === 0) {
           draftSummary += `(No items yet — send what you'd like to buy.)\n`;
         } else {
-          cleanItems.forEach((item) => {
-            draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
-          });
+          draftSummary += await this.formatDraftItemLines(cleanItems);
+          draftSummary += `\n`;
         }
 
         if (validated) {
@@ -994,9 +1056,7 @@ export class WebhooksController {
         return;
       }
       let cartSummary = `Your current order:\n\n`;
-      existingDraft.items.forEach((item) => {
-        cartSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
-      });
+      cartSummary += await this.formatDraftItemLines(existingDraft.items);
       cartSummary += existingDraft.deliveryAddress
         ? `\n📍 Delivery to: ${existingDraft.deliveryAddress}`
         : `\n⚠️ Still need your delivery address.`;
@@ -1022,7 +1082,7 @@ export class WebhooksController {
       );
 
       const QUANTITY_TOKEN_RE =
-        /\d+\s*(kg|kilo|kilos|g|grams?|piece|pcs|cup|cups|bag|bags|bottle|bottles|can|cans|pack|packs|tuber|tubers|congo|tray|trays)\b|[n₦]\s*\d|\d+\s*(k\b|thousand|hundred|naira|ngn|worth)/i;
+        /\d+\s*(kg|kilo|kilos|g|grams?|piece|pcs|cup|cups|bag|bags|bottle|bottles|can|cans|pack|packs|tuber|tubers|congo|tray|trays|derica|dirica|dericas|diricas)\b|[n₦]\s*\d|\d+\s*(k\b|thousand|hundred|naira|ngn|worth)/i;
 
       const realMissingQty = catalogItems.filter(
         (item) =>
@@ -1041,7 +1101,7 @@ export class WebhooksController {
           customerId,
           conversationId,
           whatsappNumber,
-          `Got it! Let me get the quantities:\n\nHow much *${itemNames[0]}* do you want? (e.g., "2 cups", "1 kg", "N500 worth")`,
+          `Got it! Here's today's price:\n\n${await this.quantityPromptFor(itemNames[0])}`,
         );
         return;
       }
@@ -1058,9 +1118,8 @@ export class WebhooksController {
         if (cleanItems.length === 0) {
           draftSummary += `(No items yet — send what you'd like to buy.)\n`;
         } else {
-          cleanItems.forEach((item) => {
-            draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
-          });
+          draftSummary += await this.formatDraftItemLines(cleanItems);
+          draftSummary += `\n`;
         }
 
         const addressInfo =
@@ -1387,9 +1446,8 @@ export class WebhooksController {
       if (draft.items.length === 0) {
         draftSummary += `(No items yet — send what you'd like to buy.)\n`;
       } else {
-        draft.items.forEach((item) => {
-          draftSummary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
-        });
+        draftSummary += await this.formatDraftItemLines(draft.items);
+        draftSummary += `\n`;
       }
 
       draftSummary += `\n📍 *Delivery to:* ${addressInfo.formatted || addressInfo.address}`;
@@ -1432,7 +1490,7 @@ export class WebhooksController {
         customerId,
         conversationId,
         whatsappNumber,
-        `Sorry, I didn't catch that — please tell me how much *${catalogPending[0]}* you want (e.g., "2 cups", "1 kg", "N500 worth")`,
+        `Sorry, I didn't catch that.\n\n${await this.quantityPromptFor(catalogPending[0])}`,
       );
       return true;
     }
@@ -1452,7 +1510,7 @@ export class WebhooksController {
         customerId,
         conversationId,
         whatsappNumber,
-        `Great! ✅ ${quantity.value} ${quantity.unit} of ${currentItem} added.\n\nHow much *${catalogPending[0]}* do you want? (e.g., "2 cups", "1 kg", "N500 worth")`,
+        `Great! ✅ ${quantity.value} ${quantity.unit} of ${currentItem} added.\n\n${await this.quantityPromptFor(catalogPending[0])}`,
       );
     } else {
       const draft = await this.getSanitizedDraft(conversationId);
@@ -1460,9 +1518,7 @@ export class WebhooksController {
         await this.conversations.getDeliveryAddress(conversationId);
 
       let summary = `Noted! Here's your list so far:\n\n`;
-      draft.items.forEach((item) => {
-        summary += `🔸 *${item.name}* — ${item.quantity} ${item.unit}\n`;
-      });
+      summary += await this.formatDraftItemLines(draft.items);
 
       if (addressInfo.address) {
         summary += `\n📍 *Delivery to:* ${addressInfo.formatted || addressInfo.address}`;
@@ -1926,83 +1982,109 @@ export class WebhooksController {
     return "default";
   }
 
-  private async replyWithCatalog(
+  private async handleCancelRequest(
     customerId: string,
     conversationId: string,
     whatsappNumber: string,
-    intent: BrowseIntent,
   ): Promise<void> {
-    const reply = await this.catalogBrowse.buildReply(intent);
+    const draft = await this.getSanitizedDraft(conversationId);
+    const pendingCount = (
+      await this.conversations.getPendingItems(conversationId)
+    ).length;
+    const hadDraft = draft.items.length > 0 || pendingCount > 0 || !!draft.deliveryAddress;
 
-    if (reply.list) {
-      await this.sendListAndLog(
+    const unpaidOrders = await this.prisma.order.findMany({
+      where: {
         customerId,
-        conversationId,
-        whatsappNumber,
-        reply.list.body,
-        reply.list.button,
-        reply.list.sections,
-        { header: reply.list.header, footer: reply.list.footer },
-      );
-      return;
-    }
+        paymentStatus: { in: [PaymentStatus.unpaid, PaymentStatus.pending] },
+        status: { in: [OrderStatus.pending, OrderStatus.awaiting_payment] },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
 
-    for (const text of reply.texts) {
-      await this.sendAndLog(
+    const inProgress = await this.prisma.order.findFirst({
+      where: {
         customerId,
-        conversationId,
-        whatsappNumber,
-        text,
-      );
-    }
-  }
+        status: {
+          in: [
+            OrderStatus.confirmed,
+            OrderStatus.shopping,
+            OrderStatus.purchased,
+            OrderStatus.dispatched,
+          ],
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, status: true },
+    });
 
-  private async sendListAndLog(
-    customerId: string,
-    conversationId: string,
-    whatsappNumber: string,
-    body: string,
-    button: string,
-    sections: Array<{
-      title?: string;
-      rows: Array<{ id: string; title: string; description?: string }>;
-    }>,
-    options?: { header?: string; footer?: string },
-  ): Promise<void> {
-    try {
-      const sentPayload = await this.whatsapp.sendList(
-        whatsappNumber,
-        body,
-        button,
-        sections,
-        options,
-      );
-      const rowSummary = sections
-        .flatMap((section) =>
-          section.rows.map((row) =>
-            row.description
-              ? `• ${row.title} — ${row.description}`
-              : `• ${row.title}`,
-          ),
-        )
-        .join("\n");
-      const loggedBody = `${body}\n\n${rowSummary}`;
-      await this.prisma.message.create({
+    await this.conversations.resetConversationState(conversationId);
+    await this.prisma.pendingOrder.updateMany({
+      where: { phone: whatsappNumber, completed: false },
+      data: { completed: true },
+    });
+
+    const cancelledIds: string[] = [];
+    for (const order of unpaidOrders) {
+      await this.prisma.order.update({
+        where: { id: order.id },
         data: {
-          customerId,
-          sessionId: conversationId,
-          whatsappMessageId: sentPayload.wamid!,
-          direction: MessageDirection.outbound,
-          body: loggedBody,
-          raw: { sentPayload } as Prisma.InputJsonValue,
+          status: OrderStatus.cancelled,
+          cancelReason: "Cancelled by customer on WhatsApp",
         },
       });
-      await this.conversations.touch(conversationId);
-    } catch (error) {
-      this.logger.error(
-        `Failed to send/log catalog list to ${whatsappNumber}`,
-        error as Error,
-      );
+      cancelledIds.push(order.id.slice(0, 8).toUpperCase());
     }
+
+    await this.conversations.closeSession(conversationId);
+
+    let body = "";
+    if (cancelledIds.length > 0) {
+      body =
+        cancelledIds.length === 1
+          ? `Done — I cancelled order *${cancelledIds[0]}* and cleared your list.`
+          : `Done — I cancelled orders *${cancelledIds.join(", ")}* and cleared your list.`;
+    } else if (hadDraft) {
+      body = `Done — I cleared your list so you can start fresh.`;
+    } else {
+      body = `Nothing to cancel — no open list or unpaid order.`;
+    }
+
+    body += `\n\nSend a new shopping list whenever you're ready.`;
+
+    if (inProgress) {
+      body += `\n\n⚠️ Order *${inProgress.id.slice(0, 8).toUpperCase()}* is already being processed, so that one stays. Message us if you need help with it.`;
+    }
+
+    await this.sendAndLog(
+      customerId,
+      conversationId,
+      whatsappNumber,
+      body,
+    );
+  }
+
+  private async quantityPromptFor(itemName: string): Promise<string> {
+    const products = await this.prisma.product.findMany({
+      where: { isAvailable: true },
+      select: { id: true, name: true, unit: true, currentPrice: true },
+    });
+    return quoteQuantityPrompt(itemName, findLiveProduct(itemName, products));
+  }
+
+  private async formatDraftItemLines(
+    items: { name: string; quantity: number; unit: string }[],
+  ): Promise<string> {
+    if (items.length === 0) return "";
+    const priced = await this.priceDraftItems(items);
+    return priced
+      .map((item) => {
+        const line = `🔸 *${item.name}* — ${item.quantity} ${item.unit}`;
+        return item.unitPrice > 0
+          ? `${line} — ${formatNaira(item.lineTotal)}`
+          : line;
+      })
+      .join("\n");
   }
 }

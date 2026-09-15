@@ -11,18 +11,17 @@ const botResponses = [
     key: 'welcome',
     body:
       `Aba {{name}}! 👋 Welcome to OjaRun — we run your market errands for you here in Ibadan.\n\n` +
-      `Just drop your shopping list right here (e.g. "2kg tomatoes, 1 bag rice") and we go sort you out sharp-sharp! 🛍️\n\n` +
-      `Reply *BROWSE* to see today's products and live prices, *MENU* for options, or *HELP* if you need guidance.`,
+      `Just drop your shopping list right here (e.g. "rice", "2kg tomatoes, 1 bag beans") and I'll quote today's prices as we go. 🛍️\n\n` +
+      `Reply *MENU* for options, *CANCEL* to start over, or *HELP* if you need guidance.`,
   },
   {
     key: 'menu',
     body:
       `Wetin dey do 🛒\n\n` +
-      `🛍️ *BROWSE* — see today's products with live prices\n` +
       `🛍️ *ORDER* — start a new market order\n` +
-      `📦 Just type your shopping list directly, e.g. "1kg beef, 2 tubers yam"\n` +
+      `❌ *CANCEL* — clear your list / unpaid order and start fresh\n` +
+      `📦 Just type your shopping list, e.g. "rice" or "1kg beef, 2 tubers yam" — I'll quote today's price\n` +
       `📍 *LOCATION* — see where we dey deliver\n` +
-      `💰 *HOW MUCH rice* — check a live price\n` +
       `❓ *HELP* — how OjaRun works\n\n` +
       `Wetin you wan do today?`,
   },
@@ -38,12 +37,12 @@ const botResponses = [
     key: 'help',
     body:
       `No wahala, here's how OjaRun works 🙏\n\n` +
-      `1️⃣ Reply *BROWSE* to see today's products and live prices\n` +
-      `2️⃣ Send us your market list (items + quantities)\n` +
-      `3️⃣ We confirm your delivery address and time\n` +
-      `4️⃣ Our shoppers go buy the items for you for Ibadan market\n` +
-      `5️⃣ We deliver to you and send your pricing breakdown\n\n` +
-      `Reply *MENU* anytime to see your options, or just start typing your list.`,
+      `1️⃣ Send us what you want (e.g. "rice") — we'll quote today's live price and ask how much\n` +
+      `2️⃣ Add quantities (kg, derica, bottles, or Naira worth)\n` +
+      `3️⃣ We confirm your delivery address\n` +
+      `4️⃣ Our shoppers buy the items for you in Ibadan market\n` +
+      `5️⃣ We deliver and send your breakdown\n\n` +
+      `Reply *CANCEL* anytime to start over, or *MENU* to see options.`,
   },
   {
     key: 'location',
@@ -55,8 +54,8 @@ const botResponses = [
     key: 'pricing',
     body:
       `Pricing follows today's market 💰\n\n` +
-      `Reply *BROWSE* to see the live product list, or ask *HOW MUCH rice* (swap in any item).\n\n` +
-      `We update prices as we restock. When you order, we confirm the amount before delivery — no hidden charges.`,
+      `Just send the item (e.g. "rice") and I'll tell you today's price per kg or derica, then ask how much you want.\n\n` +
+      `We update prices as we restock. No hidden charges — you'll see the amount before you confirm.`,
   },
 ];
 

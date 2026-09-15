@@ -126,6 +126,19 @@ export class ConversationService {
     });
   }
 
+  /** Wipe list, address, and quantity prompts so the customer can start over. */
+  async resetConversationState(sessionId: string): Promise<void> {
+    await this.prisma.chatSession.update({
+      where: { id: sessionId },
+      data: {
+        draftItems: Prisma.JsonNull,
+        draftDeliveryAddress: null,
+        draftDeliveryAddressMeta: Prisma.JsonNull,
+        pendingItems: Prisma.JsonNull,
+      },
+    });
+  }
+
   // ===== PENDING ITEMS METHODS =====
 
   async setPendingItems(sessionId: string, items: string[]): Promise<void> {
@@ -253,7 +266,7 @@ export class ConversationService {
 
     // Check for count: "3 pieces", "5 pcs", "2 cups"
     const countMatch = text.match(
-      /(\d+(?:\.\d+)?)\s*(piece|pcs|cup|cups|bag|bags|bottle|bottles|can|cans|pack|packs|tuber|tubers|congo|tray|trays)\b/i,
+      /(\d+(?:\.\d+)?)\s*(piece|pcs|cup|cups|bag|bags|bottle|bottles|can|cans|pack|packs|tuber|tubers|congo|tray|trays|derica|dirica|dericas|diricas)\b/i,
     );
     if (countMatch) {
       return {
