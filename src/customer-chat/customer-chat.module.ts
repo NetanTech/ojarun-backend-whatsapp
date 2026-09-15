@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
+import { WebhooksModule } from '../webhooks/webhooks.module';
 import { CustomerChatController } from './customer-chat.controller';
-import { AiService } from '../webhooks/ai.service';
 
 @Module({
+  imports: [WebhooksModule],
   controllers: [CustomerChatController],
-  providers: [AiService],
 })
 export class CustomerChatModule {}

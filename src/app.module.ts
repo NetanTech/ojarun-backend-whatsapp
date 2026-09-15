@@ -19,11 +19,14 @@ import { AdminsModule } from './admins/admins.module';
 import { InboxModule } from './inbox/inbox.module';
 import { PaystackModule } from './paystack/paystack.module';
 import { FavoritesModule } from './favorites/favorites.module';
+import { CartModule } from './cart/cart.module';
 import { ShoppingListsModule } from './shopping-lists/shopping-lists.module';
 import { PromoCodesModule } from './promo-codes/promo-codes.module';
 import { AddressesModule } from './addresses/addresses.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { RewardsModule } from './rewards/rewards.module';
 import { CustomerChatModule } from './customer-chat/customer-chat.module';
+import { ReviewsModule } from './reviews/reviews.module';
 
 @Module({
   imports: [
@@ -47,11 +50,14 @@ import { CustomerChatModule } from './customer-chat/customer-chat.module';
     AdminsModule,
     InboxModule,
     FavoritesModule,
+    CartModule,
     ShoppingListsModule,
     PromoCodesModule,
     AddressesModule,
     NotificationsModule,
+    RewardsModule,
     CustomerChatModule,
+    ReviewsModule,
   ],
 })
 export class AppModule {}

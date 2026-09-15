@@ -9,7 +9,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
-export class CustomerChatHistoryItemDto {
+export class ChatHistoryMessageDto {
   @IsIn(['user', 'assistant'])
   role!: 'user' | 'assistant';
 
@@ -19,7 +19,7 @@ export class CustomerChatHistoryItemDto {
   content!: string;
 }
 
-export class SendCustomerChatDto {
+export class SendChatMessageDto {
   @IsString()
   @MinLength(1)
   @MaxLength(4000)
@@ -28,6 +28,6 @@ export class SendCustomerChatDto {
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
-  @Type(() => CustomerChatHistoryItemDto)
-  history?: CustomerChatHistoryItemDto[];
+  @Type(() => ChatHistoryMessageDto)
+  history?: ChatHistoryMessageDto[];
 }

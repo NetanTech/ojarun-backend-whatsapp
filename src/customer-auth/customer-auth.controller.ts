@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, UseGuards, HttpCode } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Body, UseGuards, HttpCode } from '@nestjs/common';
 import { CustomerAuthService } from './customer-auth.service';
 import {
   RegisterCustomerDto,
@@ -8,6 +8,8 @@ import {
   ForgotCustomerPasswordDto,
   VerifyCustomerResetOtpDto,
   ResetCustomerPasswordDto,
+  UpdateCustomerProfileDto,
+  ChangeCustomerPasswordDto,
 } from './dto/customer-auth.dto';
 import { CustomerJwtAuthGuard } from './customer-jwt-auth.guard';
 import { CurrentCustomer, AuthCustomer } from './current-customer.decorator';
@@ -62,5 +64,31 @@ export class CustomerAuthController {
   @UseGuards(CustomerJwtAuthGuard)
   me(@CurrentCustomer() customer: AuthCustomer) {
     return this.auth.me(customer.id);
+  }
+
+  @Patch('me')
+  @UseGuards(CustomerJwtAuthGuard)
+  updateProfile(
+    @CurrentCustomer() customer: AuthCustomer,
+    @Body() dto: UpdateCustomerProfileDto,
+  ) {
+    return this.auth.updateProfile(customer.id, dto);
+  }
+
+  @Post('change-password')
+  @UseGuards(CustomerJwtAuthGuard)
+  @HttpCode(200)
+  changePassword(
+    @CurrentCustomer() customer: AuthCustomer,
+    @Body() dto: ChangeCustomerPasswordDto,
+  ) {
+    return this.auth.changePassword(customer.id, dto);
+  }
+
+  @Post('deactivate')
+  @UseGuards(CustomerJwtAuthGuard)
+  @HttpCode(200)
+  deactivate(@CurrentCustomer() customer: AuthCustomer) {
+    return this.auth.deactivateAccount(customer.id);
   }
 }

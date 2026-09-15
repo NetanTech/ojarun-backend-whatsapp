@@ -6,11 +6,15 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { verifyToken } from '../auth/crypto.util';
+import { PrismaService } from '../prisma/prisma.service';
 import { AuthCustomer } from './current-customer.decorator';
 
 @Injectable()
 export class CustomerJwtAuthGuard implements CanActivate {
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
@@ -26,6 +30,16 @@ export class CustomerJwtAuthGuard implements CanActivate {
         this.config.get<string>('jwt.secret') || 'dev-only-change-me',
       );
       if (payload.type !== 'access' || payload.kind !== 'customer') {
+        throw new UnauthorizedException('Invalid or missing token');
+      }
+
+      // Checked per-request (not just at login) so a deactivation takes
+      // effect immediately, even against an access token issued earlier.
+      const record = await this.prisma.customer.findUnique({
+        where: { id: payload.sub },
+        select: { deactivatedAt: true },
+      });
+      if (!record || record.deactivatedAt) {
         throw new UnauthorizedException('Invalid or missing token');
       }
 

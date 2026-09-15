@@ -10,6 +10,8 @@ import { ConfigService } from '@nestjs/config';
 import { Customer } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
+import { RewardsService } from '../rewards/rewards.service';
+import { generateUniqueReferralCode } from '../common/referral-code.util';
 import {
   RegisterCustomerDto,
   LoginCustomerDto,
@@ -18,6 +20,8 @@ import {
   ForgotCustomerPasswordDto,
   VerifyCustomerResetOtpDto,
   ResetCustomerPasswordDto,
+  UpdateCustomerProfileDto,
+  ChangeCustomerPasswordDto,
 } from './dto/customer-auth.dto';
 import {
   hashOtp,
@@ -41,6 +45,7 @@ export class CustomerAuthService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly email: EmailService,
+    private readonly rewards: RewardsService,
   ) {}
 
   async register(dto: RegisterCustomerDto) {
@@ -63,6 +68,17 @@ export class CustomerAuthService {
 
     const passwordHash = await hashPassword(dto.password);
 
+    let referredById: string | null = null;
+    if (dto.referralCode?.trim()) {
+      const referrer = await this.prisma.customer.findUnique({
+        where: { referralCode: dto.referralCode.trim().toUpperCase() },
+        select: { id: true },
+      });
+      if (referrer && referrer.id !== existingByPhone?.id) {
+        referredById = referrer.id;
+      }
+    }
+
     if (existingByPhone) {
       // A Customer row can already exist with no password if they've only
       // ever messaged the WhatsApp bot — treat this as completing signup.
@@ -74,6 +90,7 @@ export class CustomerAuthService {
           passwordHash,
           deliveryArea: dto.deliveryArea.trim(),
           emailVerifiedAt: null,
+          ...(referredById && !existingByPhone.referredById ? { referredById } : {}),
         },
       });
     } else {
@@ -84,6 +101,8 @@ export class CustomerAuthService {
           email,
           passwordHash,
           deliveryArea: dto.deliveryArea.trim(),
+          referralCode: await generateUniqueReferralCode(this.prisma),
+          referredById,
         },
       });
     }
@@ -123,10 +142,20 @@ export class CustomerAuthService {
       data: { usedAt: new Date() },
     });
 
+    const existing = await this.prisma.customer.findUnique({ where: { email } });
+    if (!existing) {
+      throw new BadRequestException('Invalid or expired code');
+    }
+    const isFirstVerification = !existing.emailVerifiedAt;
+
     const customer = await this.prisma.customer.update({
       where: { email },
       data: { emailVerifiedAt: new Date() },
     });
+
+    if (isFirstVerification && customer.referredById) {
+      await this.rewards.awardReferralBonuses(customer.id, customer.referredById);
+    }
 
     const accessToken = this.signAccessToken(customer);
     return { accessToken, customer: this.toPublicCustomer(customer) };
@@ -146,6 +175,12 @@ export class CustomerAuthService {
       throw new UnauthorizedException('Invalid phone number or password');
     }
 
+    if (customer.deactivatedAt) {
+      throw new UnauthorizedException(
+        'This account has been deactivated. Contact support to reactivate it.',
+      );
+    }
+
     const accessToken = this.signAccessToken(customer);
     return { accessToken, customer: this.toPublicCustomer(customer) };
   }
@@ -154,12 +189,11 @@ export class CustomerAuthService {
     const email = dto.email.trim().toLowerCase();
     const customer = await this.prisma.customer.findUnique({ where: { email } });
 
-    const response = {
-      message: 'If an account exists for that email, a reset code has been sent.',
-    };
     if (!customer?.passwordHash) {
-      return response;
+      throw new NotFoundException('No account found for this email.');
     }
+
+    const response = { message: 'A reset code has been sent to your email.' };
 
     const code = this.generateOtp();
     const codeHash = await hashOtp(code);
@@ -242,6 +276,72 @@ export class CustomerAuthService {
       throw new UnauthorizedException('Customer not found');
     }
     return this.toPublicCustomer(customer);
+  }
+
+  async updateProfile(customerId: string, dto: UpdateCustomerProfileDto) {
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+    });
+    if (!customer) {
+      throw new UnauthorizedException('Customer not found');
+    }
+
+    const data: { name?: string; email?: string; deliveryArea?: string } = {};
+
+    if (dto.name !== undefined) {
+      data.name = dto.name.trim();
+    }
+
+    if (dto.email !== undefined) {
+      const email = dto.email.trim().toLowerCase();
+      if (email !== customer.email) {
+        const existing = await this.prisma.customer.findUnique({ where: { email } });
+        if (existing && existing.id !== customerId) {
+          throw new ConflictException('An account with this email already exists.');
+        }
+        data.email = email;
+      }
+    }
+
+    if (dto.deliveryArea !== undefined) {
+      data.deliveryArea = dto.deliveryArea.trim();
+    }
+
+    const updated = await this.prisma.customer.update({
+      where: { id: customerId },
+      data,
+    });
+    return this.toPublicCustomer(updated);
+  }
+
+  async changePassword(customerId: string, dto: ChangeCustomerPasswordDto) {
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+    });
+    if (!customer?.passwordHash) {
+      throw new UnauthorizedException('Customer not found');
+    }
+
+    const ok = await verifyPassword(dto.currentPassword, customer.passwordHash);
+    if (!ok) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    const passwordHash = await hashPassword(dto.newPassword);
+    await this.prisma.customer.update({
+      where: { id: customerId },
+      data: { passwordHash },
+    });
+
+    return { message: 'Password updated successfully' };
+  }
+
+  async deactivateAccount(customerId: string) {
+    await this.prisma.customer.update({
+      where: { id: customerId },
+      data: { deactivatedAt: new Date() },
+    });
+    return { message: 'Your account has been deactivated.' };
   }
 
   private async issueEmailOtp(email: string) {

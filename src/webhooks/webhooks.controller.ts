@@ -33,6 +33,7 @@ import {
   extractPlainItemNames,
 } from "./budget.util";
 import { matchCatalogProduct } from "./product-match.util";
+import { generateUniqueReferralCode } from "../common/referral-code.util";
 import { randomBytes } from "crypto";
 
 // Deterministic safety net: tool-calling isn't 100% reliable across every
@@ -591,7 +592,11 @@ export class WebhooksController {
 
     const customer = await this.prisma.customer.upsert({
       where: { whatsappNumber },
-      create: { whatsappNumber, name: profileName ?? null },
+      create: {
+        whatsappNumber,
+        name: profileName ?? null,
+        referralCode: await generateUniqueReferralCode(this.prisma),
+      },
       update: profileName ? { name: profileName } : {},
     });
 

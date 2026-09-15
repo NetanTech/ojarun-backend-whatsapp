@@ -49,11 +49,15 @@ Your job each turn:
     resetExpiresIn: process.env.JWT_RESET_EXPIRES_IN ?? '15m',
   },
   cors: {
-    origin: process.env.CORS_ORIGIN ?? 'http://localhost:3001',
+    // Render's dashboard has this saved as CORS_ORIGINS (plural) — accept
+    // either name so a mismatched env var name in any given deployment
+    // doesn't silently fall back to the localhost default.
+    origin:
+      process.env.CORS_ORIGINS ?? process.env.CORS_ORIGIN ?? 'http://localhost:3001',
   },
   adminAppUrl:
     process.env.ADMIN_APP_URL ??
-    process.env.CORS_ORIGIN?.split(',')[0]?.trim() ??
+    (process.env.CORS_ORIGINS ?? process.env.CORS_ORIGIN)?.split(',')[0]?.trim() ??
     'http://localhost:3001',
   // Public URL of this Nest API (used for Paystack webhook / redirects)
   publicApiUrl:

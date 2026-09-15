@@ -1,6 +1,8 @@
 import { Body, Controller, HttpCode, Post } from '@nestjs/common';
-import { AiService } from '../webhooks/ai.service';
-import { SendCustomerChatDto } from './dto/customer-chat.dto';
+import { AiService, AiChatResult } from '../webhooks/ai.service';
+import { SendChatMessageDto } from './dto/customer-chat.dto';
+
+const MAX_HISTORY_MESSAGES = 20;
 
 @Controller('customer-chat')
 export class CustomerChatController {
@@ -8,21 +10,16 @@ export class CustomerChatController {
 
   @Post('message')
   @HttpCode(200)
-  async message(@Body() dto: SendCustomerChatDto) {
-    const result = await this.ai.chat(
-      dto.message,
-      dto.history ?? [],
-      null,
-    );
+  async sendMessage(@Body() dto: SendChatMessageDto): Promise<AiChatResult> {
+    const history = (dto.history ?? []).slice(-MAX_HISTORY_MESSAGES);
 
-    if (!result) {
-      return {
-        type: 'text' as const,
-        content:
-          'Sorry, I no catch that just now. Abeg try again in a moment.',
-      };
-    }
+    const result = await this.ai.chat(dto.message, history, null);
+    if (result) return result;
 
-    return result;
+    return {
+      type: 'text',
+      content:
+        "Sorry, I'm having trouble replying right now. Please try again in a moment.",
+    };
   }
 }
