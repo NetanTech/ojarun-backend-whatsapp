@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { WebhooksController } from './webhooks.controller';
-import { AddressValidationService } from '../delivery/address-validation.service';
 import { DeliveryModule } from '../delivery/delivery.module';
 import { AiService } from './ai.service';
 import { ConversationService } from './conversation.service';
@@ -26,6 +25,9 @@ import { CatalogLookupService } from './catalog-lookup.service';
     AdminNotificationService,
     CatalogLookupService,
   ],
-  exports: [AddressValidationService, AiService],
+  // DeliveryModule is re-exported (not its individual providers) so importers
+  // still resolve AddressValidationService, which now lives there rather than
+  // in this module's own providers.
+  exports: [DeliveryModule, AiService],
 })
 export class WebhooksModule {}
