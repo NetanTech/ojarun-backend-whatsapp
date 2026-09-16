@@ -128,7 +128,29 @@ export class AddressValidationService {
       this.logger.warn(`Geocoding failed for address: ${address}, status: ${response.data.status}`);
       return null;
     } catch (error) {
-      this.logger.error(`Geocoding error for address ${address}:`, error);
+      // Google puts the actionable reason (API not enabled, key restricted to
+      // referrers, billing disabled) in the response body, not the HTTP status.
+      // Surfacing it here is the difference between a usable log and a bare 403.
+      const response = (error as any)?.response;
+      const body = response?.data;
+      const reason =
+        body?.error_message ||
+        body?.error?.message ||
+        (typeof body === 'string' ? body : null);
+
+      this.logger.error(
+        `Geocoding failed for "${address}" — HTTP ${response?.status ?? '?'}` +
+          (body?.status ? ` status=${body.status}` : '') +
+          (reason ? ` reason="${reason}"` : ''),
+      );
+
+      if (response?.status === 403) {
+        this.logger.error(
+          'Google rejected the Maps key. Check: (1) Geocoding API is enabled on the project, ' +
+            '(2) billing is enabled, (3) the key has no HTTP-referrer restriction — ' +
+            'server-side calls need an IP restriction or none at all.',
+        );
+      }
       return null;
     }
   }

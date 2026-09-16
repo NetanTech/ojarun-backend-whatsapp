@@ -4,7 +4,7 @@
   "description": "Ojarun backend — Phase 1 (WhatsApp). Channel-agnostic core; the main app will grow on top of this.",
   "private": true,
   "scripts": {
-    "build": "prisma generate && nest build",
+    "build": "prisma generate && prisma migrate deploy && nest build",
     "dev": "nest start --watch",
     "start": "node dist/main.js",
     "start:dev": "nest start --watch",
