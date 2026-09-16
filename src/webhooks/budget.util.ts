@@ -21,8 +21,125 @@ const COMMON_ITEMS = new Set([
   'palm oil', 'vegetable oil', 'pepper soup', 'beef tripe',
   'cow foot', 'goat head', 'dry fish', 'stock fish',
   'coconut oil', 'groundnut oil', 'brown beans', 'white beans',
-  'honey beans', 'oloyin beans', 'plantain chips'
+  'honey beans', 'oloyin beans', 'plantain chips', 'turkey',
+  'spaghetti', 'tomato paste', 'dry pepper', 'semo', 'semovita',
+  'amala', 'eba', 'bread', 'ponmo', 'pomo',
 ]);
+
+export const MEASURE_UNITS =
+  'kg|kilo|kilos|g|grams?|pieces?|pcs|cups?|bags?|bottles?|cans?|packs?|tubers?|congo|trays?|dericas?|diricas?|rolls?|tins?|sachets?|paints?';
+
+const ITEM_ALIASES: Record<string, string> = {
+  spag: 'spaghetti',
+  spagetti: 'spaghetti',
+  'golden penny': 'spaghetti',
+  'goldenpenny': 'spaghetti',
+  'tomato paste': 'tomato paste',
+  'tin tomato': 'tomato paste',
+  'tinned tomato': 'tomato paste',
+  'dry pepper': 'dry pepper',
+  'dried pepper': 'dry pepper',
+  ata: 'pepper',
+  'ata rodo': 'pepper',
+  shombo: 'pepper',
+  ponmo: 'pomo',
+  kpomo: 'pomo',
+  indomie: 'noodles',
+  'ground nut': 'groundnut',
+  'veg oil': 'vegetable oil',
+  'cooking oil': 'vegetable oil',
+};
+
+export function canonicalItemName(name: string): string {
+  let n = name
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    // Drop brand fluff customers tack on
+    .replace(/\b(golden\s*penny|ordinary|pls|please|only)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!n) return '';
+  if (ITEM_ALIASES[n]) return titleCase(ITEM_ALIASES[n]);
+  // Longest alias first so "tomato paste" wins over "tomato"
+  const aliases = Object.entries(ITEM_ALIASES).sort(
+    (a, b) => b[0].length - a[0].length,
+  );
+  for (const [alias, canon] of aliases) {
+    if (n === alias || n.includes(alias)) return titleCase(canon);
+  }
+  return titleCase(n);
+}
+
+function titleCase(value: string): string {
+  return value
+    .split(/\s+/)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(' ');
+}
+
+const FILLER_STOP =
+  /^(pls|please|that|thats|that's|what|need|can|get|this|evening|afternoon|morning|tonight|possible|ordinary|only|today|deliver|delivery|ibadan)$/i;
+
+/**
+ * Pull "2 congo of rice", "1kg turkey", "5 spag", "2 rolls of tomato paste"
+ * out of a free-text shopping list — including messy multi-line WhatsApp text.
+ */
+export function extractMeasuredItemsFromMessage(
+  message: string,
+): BudgetDraftItem[] {
+  if (!message?.trim()) return [];
+  // Normalize separators so "5 Spag, Golden penny, pls" still parses
+  const text = message
+    .replace(/[./]+/g, ' ')
+    .replace(/,/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const re = new RegExp(
+    String.raw`(\d+(?:\.\d+)?)\s*(${MEASURE_UNITS})?\s*(?:of\s+)?([a-zA-Z][a-zA-Z]*(?:\s+[a-zA-Z][a-zA-Z]*){0,4}?)(?=\s+\d|\s*$|\s+(?:and|pls|please|that|that's|thats|can|ordinary|i|my|we|also)\b)`,
+    'gi',
+  );
+  const items: BudgetDraftItem[] = [];
+  const seen = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const quantity = Number(m[1]);
+    const unit = (m[2] || 'pieces').toLowerCase();
+    const rawName = (m[3] || '')
+      .split(/\s+/)
+      .filter((w) => w && !FILLER_STOP.test(w))
+      .join(' ');
+    const name = canonicalItemName(rawName);
+    if (!name || !Number.isFinite(quantity) || quantity <= 0) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({ name, quantity, unit });
+  }
+  return items;
+}
+
+export function extractRemovalsFromMessage(message: string): string[] {
+  if (!message?.trim()) return [];
+  const names: string[] = [];
+  const re =
+    /(?:remove|delete|take\s*out|no\s+more|don['’]?t\s+want|cancel)\s+(?:the\s+)?([a-zA-Z][a-zA-Z]*(?:\s+[a-zA-Z][a-zA-Z]*){0,3}?)(?=,|;|and|$|\.|!)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(message)) !== null) {
+    const name = canonicalItemName(m[1]);
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+export function looksLikeListEdit(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  return (
+    /^(remove|delete|take out|no more|change|make|update)\b/.test(t) ||
+    /\b(remove|delete|take out)\b/.test(t) ||
+    /\bmake\s+\w.+\s+\d/.test(t)
+  );
+}
 
 /**
  * Extract plain item names from a message (no money amounts)

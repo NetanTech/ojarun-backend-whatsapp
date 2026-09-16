@@ -266,7 +266,7 @@ export class ConversationService {
 
     // Check for count: "3 pieces", "5 pcs", "2 cups"
     const countMatch = text.match(
-      /(\d+(?:\.\d+)?)\s*(piece|pcs|cup|cups|bag|bags|bottle|bottles|can|cans|pack|packs|tuber|tubers|congo|tray|trays|derica|dirica|dericas|diricas)\b/i,
+      /(\d+(?:\.\d+)?)\s*(piece|pcs|cup|cups|bag|bags|bottle|bottles|can|cans|pack|packs|tuber|tubers|congo|tray|trays|derica|dirica|dericas|diricas|roll|rolls|tin|tins|sachet|sachets|paint|paints)\b/i,
     );
     if (countMatch) {
       return {

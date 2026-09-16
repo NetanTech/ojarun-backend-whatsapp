@@ -8,6 +8,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { EmailModule } from '../email/email.module';
 import { PaystackModule } from '../paystack/paystack.module';
 import { AdminNotificationService } from '../admins/admin-notification.service';
+import { CatalogLookupService } from './catalog-lookup.service';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { AdminNotificationService } from '../admins/admin-notification.service';
     ConversationService,  
     AdminNotificationService,
     AddressValidationService,
+    CatalogLookupService,
   ],
   exports: [AddressValidationService, AiService],
 })
