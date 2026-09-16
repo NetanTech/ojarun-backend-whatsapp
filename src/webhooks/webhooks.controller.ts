@@ -1643,7 +1643,9 @@ export class WebhooksController {
     bodyText: string,
     pendingItems: string[],
   ): Promise<boolean> {
-    const catalogPending = pendingItems.filter(isCatalogItem);
+    const catalogPending = pendingItems.filter((name) =>
+      isCatalogItem(name, this.catalog),
+    );
     if (catalogPending.length === 0) {
       await this.conversations.setPendingItems(conversationId, []);
       return false;
