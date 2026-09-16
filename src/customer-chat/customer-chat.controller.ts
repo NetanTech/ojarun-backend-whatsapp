@@ -1,10 +1,12 @@
-import { Body, Controller, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import { AiService, AiChatResult } from '../webhooks/ai.service';
 import { SendChatMessageDto } from './dto/customer-chat.dto';
 
 const MAX_HISTORY_MESSAGES = 20;
 
 @Controller('customer-chat')
+@UseGuards(ThrottlerGuard)
 export class CustomerChatController {
   constructor(private readonly ai: AiService) {}
 
