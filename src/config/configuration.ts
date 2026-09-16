@@ -87,9 +87,9 @@ Your job each turn:
   // fee is measured from there. Rates are env-tunable so pricing can change
   // without a code deploy.
   delivery: {
-    // Bodija Market, Ibadan North — 7°26'6.36"N, 3°54'51.48"E.
-    originLat: parseFloat(process.env.DELIVERY_ORIGIN_LAT ?? '7.4351'),
-    originLng: parseFloat(process.env.DELIVERY_ORIGIN_LNG ?? '3.9143'),
+    // Bodija Market, Ibadan North, as resolved by OpenStreetMap.
+    originLat: parseFloat(process.env.DELIVERY_ORIGIN_LAT ?? '7.4359015'),
+    originLng: parseFloat(process.env.DELIVERY_ORIGIN_LNG ?? '3.9157404'),
     originName: process.env.DELIVERY_ORIGIN_NAME ?? 'Bodija Market, Ibadan',
     // Straight-line km get multiplied by this to approximate road distance.
     roadFactor: parseFloat(process.env.DELIVERY_ROAD_FACTOR ?? '1.3'),

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AddressValidationService } from './address-validation.service';
+import { matchIbadanArea } from './ibadan-areas.util';
 
 export interface DeliveryQuote {
   /** Naira amount to add to the order total. */
@@ -31,8 +32,8 @@ export class DeliveryPricingService {
 
   private get rates() {
     return {
-      originLat: this.config.get<number>('delivery.originLat') ?? 7.4351,
-      originLng: this.config.get<number>('delivery.originLng') ?? 3.9143,
+      originLat: this.config.get<number>('delivery.originLat') ?? 7.4359015,
+      originLng: this.config.get<number>('delivery.originLng') ?? 3.9157404,
       originName:
         this.config.get<string>('delivery.originName') ?? 'Bodija Market',
       roadFactor: this.config.get<number>('delivery.roadFactor') ?? 1.3,
@@ -84,6 +85,27 @@ export class DeliveryPricingService {
     return Math.round(straight * roadFactor * 100) / 100;
   }
 
+  /** Quote from the area/landmark named in the address, if we recognise one. */
+  quoteForNamedArea(address: string): DeliveryQuote | null {
+    const match = matchIbadanArea(address);
+    if (!match) return null;
+
+    const distanceKm = this.distanceFromOriginKm(
+      match.area.lat,
+      match.area.lng,
+    );
+    return {
+      fee: this.feeForDistanceKm(distanceKm),
+      distanceKm,
+      lat: match.area.lat,
+      lng: match.area.lng,
+      formattedAddress: address,
+      neighborhood: match.area.name,
+      estimated: false,
+      serviceable: true,
+    };
+  }
+
   /** Quote directly from coordinates we already hold. */
   quoteForCoords(lat: number, lng: number, formattedAddress = ''): DeliveryQuote {
     const distanceKm = this.distanceFromOriginKm(lat, lng);
@@ -124,6 +146,16 @@ export class DeliveryPricingService {
     });
 
     if (!address || !address.trim()) return fallback(false);
+
+    // Named-area match first: it's free, instant, needs no API key, and for
+    // landmark-style addresses it beats asking a geocoder to parse the street.
+    const named = this.quoteForNamedArea(address);
+    if (named) {
+      this.logger.log(
+        `Priced "${address}" via area "${named.neighborhood}" — ${named.distanceKm}km, ₦${named.fee}`,
+      );
+      return named;
+    }
 
     let validated: Awaited<
       ReturnType<AddressValidationService['validateAddress']>
