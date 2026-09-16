@@ -48,7 +48,31 @@ export class OrdersService {
     });
     if (!customer) throw new NotFoundException('Customer not found');
 
-    const subtotal = dto.items.reduce(
+    // Never trust the client-supplied price for anything that matches a real
+    // catalog product — re-price it server-side from the current product
+    // price so a tampered request can't under-charge (or over-charge) an
+    // order. Items with no productId (e.g. meal bundles, which aren't real
+    // Product rows yet) fall back to the client-supplied price.
+    const productIds = dto.items
+      .map((item) => item.productId)
+      .filter((id): id is string => !!id);
+    const products = productIds.length
+      ? await this.prisma.product.findMany({ where: { id: { in: productIds } } })
+      : [];
+    const priceByProductId = new Map(
+      products.map((p) => [p.id, Number(p.currentPrice)]),
+    );
+    const pricedItems = dto.items.map((item) => {
+      const realPrice = item.productId
+        ? priceByProductId.get(item.productId)
+        : undefined;
+      return {
+        ...item,
+        price: realPrice ?? item.price,
+      };
+    });
+
+    const subtotal = pricedItems.reduce(
       (sum, item) => sum + item.price * item.quantity,
       0,
     );
@@ -89,7 +113,7 @@ export class OrdersService {
         },
       });
 
-      for (const item of dto.items) {
+      for (const item of pricedItems) {
         await tx.orderItem.create({
           data: {
             orderId: order.id,
@@ -251,6 +275,14 @@ export class OrdersService {
     if (order.status === OrderStatus.cancelled) {
       throw new BadRequestException(
         'This order was cancelled and cannot be marked as delivered.',
+      );
+    }
+    // Only let a customer confirm receipt once it's actually out for
+    // delivery — otherwise a never-shopped, never-paid order could be
+    // self-confirmed straight to "delivered" and farm loyalty points.
+    if (order.status !== OrderStatus.dispatched) {
+      throw new BadRequestException(
+        'This order is not out for delivery yet, so it can\'t be confirmed as received.',
       );
     }
 
@@ -489,6 +521,7 @@ export class OrdersService {
 
     const subtotal = orderItems.reduce((sum, item) => sum + item.lineTotal, 0);
     const total = Number(order.total) || subtotal;
+    const isWeb = order.channel === 'web';
 
     return {
       id: order.id,
@@ -508,8 +541,8 @@ export class OrdersService {
       itemsCount: orderItems.length,
       orderItems,
       subtotal,
-      agentFee: 0,
-      deliveryFee: 0,
+      agentFee: isWeb ? WEB_AGENT_FEE_NAIRA : 0,
+      deliveryFee: isWeb ? WEB_DELIVERY_FEE_NAIRA : 0,
       total,
     };
   }
