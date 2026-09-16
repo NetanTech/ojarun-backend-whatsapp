@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { WebhooksController } from './webhooks.controller';
-import { AddressValidationService } from './address-validation.service';
+import { AddressValidationService } from '../delivery/address-validation.service';
+import { DeliveryModule } from '../delivery/delivery.module';
 import { AiService } from './ai.service';
 import { ConversationService } from './conversation.service';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
@@ -16,13 +17,13 @@ import { CatalogLookupService } from './catalog-lookup.service';
     PrismaModule,
     EmailModule,
     PaystackModule,
+    DeliveryModule,
   ],
   controllers: [WebhooksController],
   providers: [
     AiService,              // 👈 Register the service directly
     ConversationService,  
     AdminNotificationService,
-    AddressValidationService,
     CatalogLookupService,
   ],
   exports: [AddressValidationService, AiService],

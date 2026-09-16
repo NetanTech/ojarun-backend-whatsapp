@@ -10,6 +10,7 @@ import { AdminNotificationService } from '../admins/admin-notification.service';
 import { PromoCodesModule } from '../promo-codes/promo-codes.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { RewardsModule } from '../rewards/rewards.module';
+import { DeliveryModule } from '../delivery/delivery.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { RewardsModule } from '../rewards/rewards.module';
     PromoCodesModule,
     NotificationsModule,
     RewardsModule,
+    DeliveryModule,
   ],
   controllers: [
     OrdersController,

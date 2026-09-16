@@ -176,6 +176,8 @@ export class ConversationService {
       formatted: string;
       neighborhood?: string;
       landmark?: string;
+      lat?: number;
+      lng?: number;
     },
   ): Promise<void> {
     const data: any = {
@@ -188,6 +190,10 @@ export class ConversationService {
         formatted: validatedAddress.formatted,
         neighborhood: validatedAddress.neighborhood,
         landmark: validatedAddress.landmark,
+        // Kept so checkout can price delivery without paying for a second
+        // geocode of an address we already resolved.
+        lat: validatedAddress.lat,
+        lng: validatedAddress.lng,
       } as unknown as Prisma.InputJsonValue;
     }
 
@@ -205,6 +211,8 @@ export class ConversationService {
     formatted?: string;
     neighborhood?: string;
     landmark?: string;
+    lat?: number;
+    lng?: number;
   }> {
     const session = await this.prisma.chatSession.findUniqueOrThrow({
       where: { id: sessionId },
@@ -216,6 +224,8 @@ export class ConversationService {
       formatted: meta.formatted,
       neighborhood: meta.neighborhood,
       landmark: meta.landmark,
+      lat: typeof meta.lat === 'number' ? meta.lat : undefined,
+      lng: typeof meta.lng === 'number' ? meta.lng : undefined,
     };
   }
 

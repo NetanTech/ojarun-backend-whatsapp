@@ -71,6 +71,39 @@ Your job each turn:
     // Optional override; defaults to Paystack HMAC with secretKey
     webhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET ?? '',
   },
+  fees: {
+    // Shopper/service fee. Charged on every order regardless of the channel it
+    // came through, so WhatsApp and web quote the same price for the same cart.
+    serviceFeeNaira: parseInt(
+      process.env.SERVICE_FEE_NAIRA ?? process.env.AGENT_FEE_NAIRA ?? '1200',
+      10,
+    ),
+  },
+  google: {
+    mapsApiKey:
+      process.env.GOOGLE_MAPS_API_KEY ?? process.env.GOOGLE_API_KEY ?? '',
+  },
+  // Distance-based delivery pricing. Origin is Bodija Market, Ibadan — every
+  // fee is measured from there. Rates are env-tunable so pricing can change
+  // without a code deploy.
+  delivery: {
+    // Bodija Market, Ibadan North — 7°26'6.36"N, 3°54'51.48"E.
+    originLat: parseFloat(process.env.DELIVERY_ORIGIN_LAT ?? '7.4351'),
+    originLng: parseFloat(process.env.DELIVERY_ORIGIN_LNG ?? '3.9143'),
+    originName: process.env.DELIVERY_ORIGIN_NAME ?? 'Bodija Market, Ibadan',
+    // Straight-line km get multiplied by this to approximate road distance.
+    roadFactor: parseFloat(process.env.DELIVERY_ROAD_FACTOR ?? '1.3'),
+    // Base fare covers everything inside baseKm; beyond that it's perKm.
+    baseFeeNaira: parseInt(process.env.DELIVERY_BASE_FEE ?? '700', 10),
+    baseKm: parseFloat(process.env.DELIVERY_BASE_KM ?? '3'),
+    perKmNaira: parseInt(process.env.DELIVERY_PER_KM ?? '150', 10),
+    maxFeeNaira: parseInt(process.env.DELIVERY_MAX_FEE ?? '3000', 10),
+    // Fees are rounded up to a clean note so riders aren't handling change.
+    roundToNaira: parseInt(process.env.DELIVERY_ROUND_TO ?? '50', 10),
+    // Charged when we can't geocode the address (no key, API down, vague
+    // landmark). Matches the old flat fee so nobody is over-charged blindly.
+    fallbackFeeNaira: parseInt(process.env.DELIVERY_FALLBACK_FEE ?? '700', 10),
+  },
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME ?? '',
     apiKey: process.env.CLOUDINARY_API_KEY ?? '',

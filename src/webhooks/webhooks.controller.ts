@@ -24,7 +24,8 @@ import { AiService, AiChatResult, OrderDraftItem } from "./ai.service";
 import { ConversationService } from "./conversation.service";
 import { EmailService } from "../email/email.service";
 import { PaystackService } from "../paystack/paystack.service";
-import { AddressValidationService } from "./address-validation.service";
+import { AddressValidationService } from "../delivery/address-validation.service";
+import { DeliveryPricingService } from "../delivery/delivery-pricing.service";
 import { AdminNotificationService } from "../admins/admin-notification.service";
 import { CatalogLookupService } from "./catalog-lookup.service";
 import {
@@ -640,6 +641,7 @@ export class WebhooksController {
     private readonly addressValidation: AddressValidationService,
     private readonly adminNotification: AdminNotificationService,
     private readonly catalog: CatalogLookupService,
+    private readonly deliveryPricing: DeliveryPricingService,
   ) {}
 
   private get gate(): ItemGate {
@@ -999,6 +1001,8 @@ export class WebhooksController {
             formatted: result.validatedAddress.formatted,
             neighborhood: result.validatedAddress.neighborhood,
             landmark: result.validatedAddress.landmark,
+            lat: result.validatedAddress.lat,
+            lng: result.validatedAddress.lng,
           },
         );
 
@@ -1390,10 +1394,38 @@ export class WebhooksController {
       addressInfo.formatted || addressInfo.address || draft.deliveryAddress;
 
     const pricedItems = await this.priceDraftItems(draft.items);
-    const totalNaira = pricedItems.reduce(
+    const subtotalNaira = pricedItems.reduce(
       (sum, item) => sum + item.lineTotal,
       0,
     );
+
+    // Price the ride from the market. Reuse the coordinates captured when the
+    // address was first validated so we don't pay for a second geocode.
+    const deliveryQuote =
+      addressInfo.lat != null && addressInfo.lng != null
+        ? this.deliveryPricing.quoteForCoords(
+            addressInfo.lat,
+            addressInfo.lng,
+            finalAddress ?? "",
+          )
+        : await this.deliveryPricing.quoteForAddress(finalAddress ?? "");
+
+    if (!deliveryQuote.serviceable) {
+      this.logger.warn(
+        `Blocked WhatsApp order for ${whatsappNumber}: address outside delivery area — "${finalAddress}"`,
+      );
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        `Sorry oh, we only deliver within Ibadan for now 📍\n\nSend an Ibadan address with a landmark (e.g. "Bodija, near UI gate") and say *"that's all"* again to confirm.`,
+      );
+      return;
+    }
+
+    const deliveryFee = deliveryQuote.fee;
+    const serviceFee = this.config.get<number>("fees.serviceFeeNaira") ?? 1200;
+    const totalNaira = subtotalNaira + serviceFee + deliveryFee;
     const allPriced = pricedItems.every((item) => item.unitPrice > 0);
     const paystackRef = `oja_${randomBytes(8).toString("hex")}`;
 
@@ -1415,6 +1447,15 @@ export class WebhooksController {
           status: OrderStatus.pending,
           paymentStatus: PaymentStatus.unpaid,
           total: new Prisma.Decimal(totalNaira.toFixed(2)),
+          subtotal: new Prisma.Decimal(subtotalNaira.toFixed(2)),
+          agentFee: new Prisma.Decimal(serviceFee.toFixed(2)),
+          deliveryFee: new Prisma.Decimal(deliveryFee.toFixed(2)),
+          deliveryDistanceKm:
+            deliveryQuote.distanceKm != null
+              ? new Prisma.Decimal(deliveryQuote.distanceKm.toFixed(2))
+              : null,
+          deliveryLat: deliveryQuote.lat,
+          deliveryLng: deliveryQuote.lng,
           customerNotes: finalAddress,
           paystackReference: paystackRef,
         },
@@ -1502,8 +1543,17 @@ export class WebhooksController {
     }
     customerInvoiceReceipt += `\n🚴 *Delivery Schedule:* ${window} ${day}`;
 
-    if (allPriced && totalNaira >= 1) {
-      customerInvoiceReceipt += `\n\n💰 *Subtotal:* ₦${totalNaira.toLocaleString("en-NG")}`;
+    if (allPriced && subtotalNaira >= 1) {
+      customerInvoiceReceipt += `\n\n💰 *Subtotal:* ₦${subtotalNaira.toLocaleString("en-NG")}`;
+      customerInvoiceReceipt += `\n🧺 *Shopper fee:* ₦${serviceFee.toLocaleString("en-NG")}`;
+      customerInvoiceReceipt += `\n🛵 *Delivery:* ₦${deliveryFee.toLocaleString("en-NG")}`;
+      if (deliveryQuote.distanceKm != null) {
+        customerInvoiceReceipt += ` (${deliveryQuote.distanceKm.toFixed(1)}km from ${this.deliveryPricing.originName})`;
+      }
+      customerInvoiceReceipt += `\n*Total:* ₦${totalNaira.toLocaleString("en-NG")}`;
+      if (deliveryQuote.estimated) {
+        customerInvoiceReceipt += `\n_Delivery is an estimate — we'll confirm once our rider has your exact spot._`;
+      }
 
       if (!this.paystack.isConfigured()) {
         this.logger.warn(
@@ -1601,6 +1651,8 @@ export class WebhooksController {
           formatted: result.validatedAddress.formatted,
           neighborhood: result.validatedAddress.neighborhood,
           landmark: result.validatedAddress.landmark,
+          lat: result.validatedAddress.lat,
+          lng: result.validatedAddress.lng,
         },
       );
 
@@ -2069,7 +2121,7 @@ export class WebhooksController {
       quantity: { toString(): string };
       unitPriceSnapshot: { toString(): string };
     }>,
-  ): Promise<{ total: number; allPriced: boolean }> {
+  ): Promise<{ subtotal: number; total: number; allPriced: boolean }> {
     const priced = await this.priceDraftItems(
       items.map((i) => ({
         name: i.productNameSnapshot,
@@ -2078,12 +2130,12 @@ export class WebhooksController {
       })),
     );
 
-    let total = 0;
+    let subtotal = 0;
     let allPriced = true;
     for (let i = 0; i < items.length; i++) {
       const line = priced[i];
       if (line.unitPrice <= 0) allPriced = false;
-      total += line.lineTotal;
+      subtotal += line.lineTotal;
       if (line.unitPrice > 0) {
         await this.prisma.orderItem.update({
           where: { id: items[i].id },
@@ -2095,14 +2147,27 @@ export class WebhooksController {
       }
     }
 
+    // Re-pricing only refreshes item prices — the fees were already quoted
+    // against this address at checkout and must survive the recompute.
+    const existing = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { deliveryFee: true, agentFee: true },
+    });
+    const deliveryFee = Number(existing?.deliveryFee ?? 0);
+    const serviceFee = Number(existing?.agentFee ?? 0);
+    const total = subtotal + serviceFee + deliveryFee;
+
     if (allPriced && total >= 1) {
       await this.prisma.order.update({
         where: { id: orderId },
-        data: { total: new Prisma.Decimal(total.toFixed(2)) },
+        data: {
+          subtotal: new Prisma.Decimal(subtotal.toFixed(2)),
+          total: new Prisma.Decimal(total.toFixed(2)),
+        },
       });
     }
 
-    return { total, allPriced };
+    return { subtotal, total, allPriced };
   }
 
   private async sendAndLog(

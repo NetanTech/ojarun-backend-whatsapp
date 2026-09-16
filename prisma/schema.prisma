@@ -273,6 +273,16 @@ model Order {
   status            OrderStatus       @default(pending)
   paymentStatus     PaymentStatus     @default(unpaid) @map("payment_status")
   total             Decimal           @default(0) @db.Decimal(12, 2)
+  // Fee breakdown is snapshotted per order. Rates change over time, so a
+  // historical order must never be re-costed from today's constants.
+  subtotal           Decimal          @default(0) @db.Decimal(12, 2)
+  deliveryFee        Decimal          @default(0) @map("delivery_fee") @db.Decimal(12, 2)
+  agentFee           Decimal          @default(0) @map("agent_fee") @db.Decimal(12, 2)
+  // Road-adjusted km from Bodija Market. Null when the address couldn't be
+  // geocoded and the fallback fee was charged instead.
+  deliveryDistanceKm Decimal?         @map("delivery_distance_km") @db.Decimal(6, 2)
+  deliveryLat        Float?           @map("delivery_lat")
+  deliveryLng        Float?           @map("delivery_lng")
   customerNotes     String?           @map("customer_notes")
   paystackReference String?           @unique @map("paystack_reference")
   paymentUrl        String?           @map("payment_url")

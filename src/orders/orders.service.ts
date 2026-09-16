@@ -14,17 +14,18 @@ import { AdminNotificationService } from '../admins/admin-notification.service';
 import { PromoCodesService } from '../promo-codes/promo-codes.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RewardsService } from '../rewards/rewards.service';
+import { DeliveryPricingService } from '../delivery/delivery-pricing.service';
 import {
   CreateOrderDto,
   ListOrdersQueryDto,
   UpdateOrderStatusDto,
 } from './dto/order.dto';
 
-// Flat fees added to every web order — must match the constants the
-// checkout UI displays (src/app/(Marketplace)/checkout/components/OrderSummary.tsx)
-// so the amount charged always matches what the customer was shown.
-const WEB_AGENT_FEE_NAIRA = 1200;
-const WEB_DELIVERY_FEE_NAIRA = 700;
+// The shopper/service fee is config-driven (fees.serviceFeeNaira) and applies
+// to WhatsApp and web alike. The checkout UI must display the same figure
+// (src/app/(Marketplace)/checkout/components/OrderSummary.tsx) so the amount
+// charged always matches what the customer was shown. Delivery is no longer
+// flat: it's quoted per-address by DeliveryPricingService.
 
 @Injectable()
 export class OrdersService {
@@ -39,7 +40,12 @@ export class OrdersService {
     private readonly promoCodes: PromoCodesService,
     private readonly notifications: NotificationsService,
     private readonly rewards: RewardsService,
+    private readonly deliveryPricing: DeliveryPricingService,
   ) {}
+
+  private get serviceFeeNaira(): number {
+    return this.config.get<number>('fees.serviceFeeNaira') ?? 1200;
+  }
 
   /** Creates a real order from the web checkout for a logged-in customer. */
   async createFromWeb(customerId: string, dto: CreateOrderDto) {
@@ -65,8 +71,24 @@ export class OrdersService {
       discountAmount = result.discountAmount;
     }
 
+    // Always re-quoted server-side. The checkout UI asks for a quote first so
+    // it can show the fee, but that number is never trusted for billing.
+    const deliveryQuote = await this.deliveryPricing.quoteForAddress(
+      dto.deliveryAddress,
+    );
+    if (!deliveryQuote.serviceable) {
+      this.logger.warn(
+        `Rejected order for customer ${customerId}: address outside the delivery area — "${dto.deliveryAddress}"`,
+      );
+      throw new BadRequestException(
+        'We only deliver within Ibadan for now. Please use an Ibadan address with a nearby landmark.',
+      );
+    }
+    const deliveryFee = deliveryQuote.fee;
+    const serviceFee = this.serviceFeeNaira;
+
     const total = Math.max(
-      subtotal + WEB_AGENT_FEE_NAIRA + WEB_DELIVERY_FEE_NAIRA - discountAmount,
+      subtotal + serviceFee + deliveryFee - discountAmount,
       0,
     );
     const paystackRef = `oja_${randomBytes(8).toString('hex')}`;
@@ -82,6 +104,15 @@ export class OrdersService {
           status: OrderStatus.pending,
           paymentStatus: PaymentStatus.unpaid,
           total: new Prisma.Decimal(total.toFixed(2)),
+          subtotal: new Prisma.Decimal(subtotal.toFixed(2)),
+          agentFee: new Prisma.Decimal(serviceFee.toFixed(2)),
+          deliveryFee: new Prisma.Decimal(deliveryFee.toFixed(2)),
+          deliveryDistanceKm:
+            deliveryQuote.distanceKm != null
+              ? new Prisma.Decimal(deliveryQuote.distanceKm.toFixed(2))
+              : null,
+          deliveryLat: deliveryQuote.lat,
+          deliveryLng: deliveryQuote.lng,
           customerNotes: deliveryNote,
           paystackReference: paystackRef,
           promoCodeId,
@@ -188,6 +219,10 @@ export class OrdersService {
     return {
       id: created.id,
       shortId,
+      subtotal,
+      agentFee: serviceFee,
+      deliveryFee,
+      deliveryDistanceKm: deliveryQuote.distanceKm,
       total,
       discountAmount,
       status: initialStatus,
@@ -274,6 +309,10 @@ export class OrdersService {
     paymentStatus: PaymentStatus;
     channel: string;
     total: Prisma.Decimal;
+    subtotal: Prisma.Decimal;
+    agentFee: Prisma.Decimal;
+    deliveryFee: Prisma.Decimal;
+    deliveryDistanceKm: Prisma.Decimal | null;
     discountAmount: Prisma.Decimal;
     cancelReason: string | null;
     customerNotes: string | null;
@@ -297,8 +336,13 @@ export class OrdersService {
       image: item.product?.imageUrl || undefined,
     }));
 
-    const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
-    const isWeb = order.channel === 'web';
+    // Prefer the snapshot taken at checkout; fall back to summing line items
+    // for orders placed before the breakdown was stored.
+    const storedSubtotal = Number(order.subtotal);
+    const subtotal =
+      storedSubtotal > 0
+        ? storedSubtotal
+        : items.reduce((sum, i) => sum + i.price * i.quantity, 0);
 
     let status: 'in progress' | 'successful' | 'failed' = 'in progress';
     if (order.status === OrderStatus.cancelled) status = 'failed';
@@ -323,8 +367,12 @@ export class OrdersService {
       status,
       items,
       subtotal,
-      agentFee: isWeb ? WEB_AGENT_FEE_NAIRA : 0,
-      deliveryFee: isWeb ? WEB_DELIVERY_FEE_NAIRA : 0,
+      agentFee: Number(order.agentFee),
+      deliveryFee: Number(order.deliveryFee),
+      deliveryDistanceKm:
+        order.deliveryDistanceKm != null
+          ? Number(order.deliveryDistanceKm)
+          : null,
       discount: Number(order.discountAmount),
       total: Number(order.total),
       cancelReason: order.cancelReason || undefined,
@@ -458,6 +506,10 @@ export class OrdersService {
     paymentStatus: PaymentStatus;
     paidAt: Date | null;
     total: Prisma.Decimal;
+    subtotal: Prisma.Decimal;
+    agentFee: Prisma.Decimal;
+    deliveryFee: Prisma.Decimal;
+    deliveryDistanceKm: Prisma.Decimal | null;
     createdAt: Date;
     updatedAt: Date;
     channel: string;
@@ -487,7 +539,11 @@ export class OrdersService {
       };
     });
 
-    const subtotal = orderItems.reduce((sum, item) => sum + item.lineTotal, 0);
+    const storedSubtotal = Number(order.subtotal);
+    const subtotal =
+      storedSubtotal > 0
+        ? storedSubtotal
+        : orderItems.reduce((sum, item) => sum + item.lineTotal, 0);
     const total = Number(order.total) || subtotal;
 
     return {
@@ -508,8 +564,12 @@ export class OrdersService {
       itemsCount: orderItems.length,
       orderItems,
       subtotal,
-      agentFee: 0,
-      deliveryFee: 0,
+      agentFee: Number(order.agentFee),
+      deliveryFee: Number(order.deliveryFee),
+      deliveryDistanceKm:
+        order.deliveryDistanceKm != null
+          ? Number(order.deliveryDistanceKm)
+          : null,
       total,
     };
   }
