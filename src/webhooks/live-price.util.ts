@@ -31,7 +31,7 @@ export function quantityExamples(
   opts?: { worth?: boolean },
 ): string {
   if (opts?.worth) {
-    return `"N2000 worth", "N5k", "pepper 3000"`;
+    return `"N2000", "N5k", "N3000 worth"`;
   }
   const u = displayUnit(unit || "kg").toLowerCase();
   if (/derica|dirica/.test(u)) {

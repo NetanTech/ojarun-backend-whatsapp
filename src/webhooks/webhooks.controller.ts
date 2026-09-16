@@ -42,6 +42,7 @@ import { matchCatalogProduct } from "./product-match.util";
 import {
   findLiveProduct,
   formatNaira,
+  prefersWorth,
   priceBoardLine,
   quoteQuantityPrompt,
 } from "./live-price.util";
@@ -2304,10 +2305,27 @@ export class WebhooksController {
     const lines = pendingNames.map((name) =>
       priceBoardLine(name, findLiveProduct(name, products)),
     );
-    const example =
-      pendingNames.length === 1
-        ? `Reply with how much, e.g. "${pendingNames[0]} N2000" or "${pendingNames[0]} 1 kg".`
-        : `Reply with *all remaining amounts in one message*, e.g. "pepper N2000, turkey 1kg".`;
+
+    const allWorth = pendingNames.every((name) => {
+      const product = findLiveProduct(name, products);
+      return prefersWorth(product?.name || name);
+    });
+    const onlyOne = pendingNames.length === 1;
+    const label = products.length
+      ? findLiveProduct(pendingNames[0], products)?.name || pendingNames[0]
+      : pendingNames[0];
+
+    let example: string;
+    if (onlyOne && allWorth) {
+      example = `Reply with *Naira worth only*, e.g. "${label} N2000" or "N2000 worth".`;
+    } else if (onlyOne) {
+      example = `Reply with how much, e.g. "${label} 2 kg" or "${label} N2000".`;
+    } else if (allWorth) {
+      example = `Reply with *all remaining Naira amounts in one message*, e.g. "pepper N2000, crayfish N1500".`;
+    } else {
+      example = `Reply with *all remaining amounts in one message*, e.g. "pepper N2000, turkey 1kg".`;
+    }
+
     return `💰 *Today's prices*\n${lines.join("\n")}\n\n${example}`;
   }
 
