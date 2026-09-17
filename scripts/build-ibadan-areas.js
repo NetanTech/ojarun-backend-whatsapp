@@ -1,15 +1,24 @@
 /**
- * Regenerates src/delivery/ibadan-areas.data.ts from OpenStreetMap.
+ * Regenerates src/delivery/ibadan-areas.data.ts.
  *
- * Delivery fees are priced off these coordinates, so they must come from a real
- * source rather than being typed from memory. Run this when you want to add
- * areas or refresh the data:
+ * Two phases:
+ *   1. Resolve each area to coordinates via OpenStreetMap (Nominatim).
+ *   2. Measure real driving distance from Bodija Market to each area via the
+ *      OpenRouteService Matrix API.
  *
- *   node scripts/build-ibadan-areas.js
+ * Both run at build time, so the app makes zero geocoding or routing calls at
+ * runtime: the area list is fixed, so each distance is a constant. That keeps
+ * checkout independent of any third-party API being up, and means the ORS free
+ * quota is never touched in production.
+ *
+ *   ORS_API_KEY=... node scripts/build-ibadan-areas.js
+ *
+ * Without ORS_API_KEY the script still works and falls back to straight-line
+ * distance x DEFAULT_ROAD_FACTOR, flagging those rows as approximate.
  *
  * Respects the Nominatim usage policy: one request per second, real User-Agent.
  * Results outside a generous Ibadan bounding box are dropped, which is what
- * filters out the bogus entries (e.g. "Ikeja", which is in Lagos).
+ * filters out bogus matches in other states.
  */
 'use strict';
 
@@ -19,6 +28,21 @@ const { execFileSync } = require('child_process');
 
 const UA = 'ojarun-delivery-pricing/1.0 (https://ojarun.ng; ops@ojarun.ng)';
 const DELAY_MS = 1200;
+
+// Bodija Market, from OSM. Must match delivery.originLat/Lng in configuration.ts.
+const ORIGIN = { lat: 7.4359015, lng: 3.9157404 };
+
+// api.openrouteservice.org is being deprecated in favour of api.heigit.org;
+// both are tried so this keeps working through the switchover.
+const ORS_HOSTS = [
+  process.env.ORS_BASE_URL,
+  'https://api.openrouteservice.org',
+  'https://api.heigit.org',
+].filter(Boolean);
+
+// Used only when ORS is unavailable: streets never run straight, so crow-flight
+// under-states real distance.
+const DEFAULT_ROAD_FACTOR = 1.3;
 
 // Generous box around greater Ibadan — anything outside is a bad match.
 const BOUNDS = { south: 7.15, north: 7.65, west: 3.70, east: 4.10 };
@@ -85,11 +109,109 @@ async function lookup(entry) {
   return { lat, lng, display: json[0].display_name };
 }
 
+const haversineKm = (a, b) => {
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+};
+
+/**
+ * One Matrix call: Bodija Market as the single source, every area as a
+ * destination. Well inside the 3,500-location cap, so this costs 1 of the
+ * 500 daily Matrix requests no matter how many areas there are.
+ *
+ * Note ORS takes coordinates as [lng, lat], the opposite of the usual order.
+ */
+function fetchRoadDistances(areas, apiKey) {
+  const locations = [
+    [ORIGIN.lng, ORIGIN.lat],
+    ...areas.map((a) => [a.lng, a.lat]),
+  ];
+  const body = JSON.stringify({
+    locations,
+    sources: [0],
+    destinations: areas.map((_, i) => i + 1),
+    metrics: ['distance'],
+    units: 'km',
+  });
+
+  let lastError = null;
+  for (const host of ORS_HOSTS) {
+    const url = `${host}/v2/matrix/driving-car`;
+    try {
+      const raw = execFileSync(
+        'curl.exe',
+        [
+          '-s', '--max-time', '60',
+          '-X', 'POST', url,
+          '-H', `Authorization: ${apiKey}`,
+          '-H', 'Content-Type: application/json',
+          '-H', `User-Agent: ${UA}`,
+          '--data-binary', body,
+        ],
+        { encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 },
+      );
+      const json = JSON.parse(raw);
+      if (json.error) {
+        lastError = `${url}: ${JSON.stringify(json.error)}`;
+        continue;
+      }
+      const row = json.distances && json.distances[0];
+      if (!Array.isArray(row)) {
+        lastError = `${url}: unexpected response shape`;
+        continue;
+      }
+      console.log(`Road distances via ${url}`);
+      return row;
+    } catch (err) {
+      lastError = `${url}: ${err.message}`;
+    }
+  }
+  throw new Error(lastError || 'no ORS host reachable');
+}
+
+// Nominatim is rate-limited to 1 req/sec, so a full geocode pass takes minutes.
+// Cache the coordinates (they don't change) to keep reruns cheap; pass
+// --refresh to force a fresh lookup.
+const CACHE_PATH = path.join(__dirname, '.cache-ibadan-coords.json');
+
+function loadCache() {
+  if (process.argv.includes('--refresh')) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(CACHE_PATH, 'utf8'));
+    const names = new Set(
+      AREAS.map((e) => (typeof e === 'string' ? e : e.name)),
+    );
+    // Only reuse if the cache covers exactly the current area list.
+    if (
+      raw.length === names.size &&
+      raw.every((r) => names.has(r.name))
+    ) {
+      return raw;
+    }
+    console.log('Area list changed — ignoring stale coordinate cache.');
+  } catch {
+    /* no cache yet */
+  }
+  return null;
+}
+
 (async () => {
   const resolved = [];
   const skipped = [];
 
-  for (const entry of AREAS) {
+  const cached = loadCache();
+  if (cached) {
+    console.log(`Using cached coordinates for ${cached.length} areas.`);
+    resolved.push(...cached.map((c) => ({ ...c })));
+  }
+
+  for (const entry of cached ? [] : AREAS) {
     const name = typeof entry === 'string' ? entry : entry.name;
     try {
       const hit = await lookup(entry);
@@ -110,26 +232,92 @@ async function lookup(entry) {
   console.log(`\nResolved ${resolved.length}, skipped ${skipped.length}`);
   skipped.forEach((s) => console.log(`skip ${s}`));
 
+  if (!cached) {
+    fs.writeFileSync(
+      CACHE_PATH,
+      JSON.stringify(
+        resolved.map(({ name, lat, lng }) => ({ name, lat, lng })),
+        null,
+        2,
+      ),
+      'utf8',
+    );
+  }
+
+  // Phase 2: real driving distance from the market to each area.
+  const apiKey = process.env.ORS_API_KEY;
+  let approximated = 0;
+  if (!apiKey) {
+    console.warn(
+      '\nORS_API_KEY not set — falling back to straight-line x ' +
+        `${DEFAULT_ROAD_FACTOR}. Distances will be approximate.`,
+    );
+    for (const r of resolved) {
+      r.roadKm = Math.round(haversineKm(ORIGIN, r) * DEFAULT_ROAD_FACTOR * 100) / 100;
+      r.approx = true;
+      approximated++;
+    }
+  } else {
+    const distances = fetchRoadDistances(resolved, apiKey);
+    resolved.forEach((r, i) => {
+      const km = distances[i];
+      if (typeof km === 'number' && isFinite(km)) {
+        r.roadKm = Math.round(km * 100) / 100;
+        r.approx = false;
+      } else {
+        // ORS couldn't route to this point (no nearby road in OSM).
+        r.roadKm = Math.round(haversineKm(ORIGIN, r) * DEFAULT_ROAD_FACTOR * 100) / 100;
+        r.approx = true;
+        approximated++;
+        console.warn(`  no route to ${r.name} — using approximation`);
+      }
+    });
+    console.log(
+      `\nRouted ${resolved.length - approximated}/${resolved.length} areas; ` +
+        `${approximated} approximated.`,
+    );
+    const straightVsRoad = resolved
+      .filter((r) => !r.approx)
+      .map((r) => r.roadKm / Math.max(haversineKm(ORIGIN, r), 0.01))
+      .filter((n) => isFinite(n) && n > 0);
+    if (straightVsRoad.length) {
+      const avg =
+        straightVsRoad.reduce((a, b) => a + b, 0) / straightVsRoad.length;
+      console.log(`Actual road:straight ratio averages ${avg.toFixed(2)}x ` +
+        `(the old flat assumption was ${DEFAULT_ROAD_FACTOR}x).`);
+    }
+  }
+
   const body = resolved
     .map(
       (r) =>
-        `  { name: ${JSON.stringify(r.name)}, lat: ${r.lat}, lng: ${r.lng} },`,
+        `  { name: ${JSON.stringify(r.name)}, lat: ${r.lat}, lng: ${r.lng}, ` +
+        `roadKm: ${r.roadKm}${r.approx ? ', approx: true' : ''} },`,
     )
     .join('\n');
 
   const out = `/**
- * Ibadan areas with coordinates, generated from OpenStreetMap via
- * scripts/build-ibadan-areas.js. Do not hand-edit — rerun the script instead.
+ * Ibadan areas with coordinates and driving distance from Bodija Market.
+ * Generated by scripts/build-ibadan-areas.js — do not hand-edit, rerun instead.
  *
- * Delivery fees are priced from these points, so every entry is a real
- * OSM-resolved location rather than an estimate.
+ * Coordinates come from OpenStreetMap; roadKm is real driving distance from
+ * the OpenRouteService Matrix API. Both are resolved at build time because the
+ * area list is fixed, so these values are constants — the running app makes no
+ * geocoding or routing calls to price a known area.
+ *
+ * Delivery fees are computed from roadKm, so these are money-critical numbers.
  *
  * Data (c) OpenStreetMap contributors, ODbL 1.0 — https://osm.org/copyright
+ * Routing (c) openrouteservice.org by HeiGIT | OpenStreetMap contributors
  */
 export interface IbadanArea {
   name: string;
   lat: number;
   lng: number;
+  /** Driving km from Bodija Market. */
+  roadKm: number;
+  /** True when routing was unavailable and this is a straight-line estimate. */
+  approx?: boolean;
 }
 
 export const IBADAN_AREA_COORDS: IbadanArea[] = [

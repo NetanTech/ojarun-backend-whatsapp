@@ -90,10 +90,11 @@ export class DeliveryPricingService {
     const match = matchIbadanArea(address);
     if (!match) return null;
 
-    const distanceKm = this.distanceFromOriginKm(
-      match.area.lat,
-      match.area.lng,
-    );
+    // roadKm is real driving distance precomputed at build time; only fall back
+    // to the straight-line estimate if an entry somehow lacks it.
+    const distanceKm =
+      match.area.roadKm ??
+      this.distanceFromOriginKm(match.area.lat, match.area.lng);
     return {
       fee: this.feeForDistanceKm(distanceKm),
       distanceKm,
