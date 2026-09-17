@@ -80,6 +80,22 @@ const AREAS = [
   { name: 'Egbeda', query: 'Egbeda, Oyo State, Nigeria' },
 ];
 
+/**
+ * Areas neither OpenStreetMap nor Pelias can resolve by name, so their
+ * coordinates are supplied by hand. Get these by dropping a pin in Google Maps
+ * and copying the lat/lng. They still get real routed distance like everything
+ * else — only the coordinate is manual.
+ *
+ * Without an entry here, these addresses fall back to the flat fee, which
+ * under-charges the far ones badly (Apata is ~16km out).
+ */
+const MANUAL_AREAS = [
+  // { name: 'Apata', lat: 0, lng: 0 },
+  // { name: 'Monatan', lat: 0, lng: 0 },
+  // { name: 'Soka', lat: 0, lng: 0 },
+  // { name: 'Elekuro', lat: 0, lng: 0 },
+];
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Shells out to curl rather than using fetch(): on Windows behind a
@@ -251,7 +267,8 @@ function loadCache() {
   console.log(`\nResolved ${resolved.length}, skipped ${skipped.length}`);
   skipped.forEach((s) => console.log(`skip ${s}`));
 
-  if (!cached) {
+  // Same protection for the cache: an interrupted run must not empty it.
+  if (!cached && resolved.length > 0) {
     fs.writeFileSync(
       CACHE_PATH,
       JSON.stringify(
@@ -261,6 +278,15 @@ function loadCache() {
       ),
       'utf8',
     );
+  }
+
+  for (const manual of MANUAL_AREAS) {
+    if (!resolved.some((r) => r.name === manual.name)) {
+      resolved.push({ ...manual });
+      console.log(
+        `man  ${manual.name.padEnd(32)} ${manual.lat.toFixed(5)}, ${manual.lng.toFixed(5)}`,
+      );
+    }
   }
 
   // Phase 2: real driving distance from the market to each area.
@@ -345,6 +371,34 @@ ${body}
 `;
 
   const dest = path.join(__dirname, '..', 'src', 'delivery', 'ibadan-areas.data.ts');
+
+  // Never let a failed or interrupted run destroy good data. An earlier run was
+  // killed mid-flight while Nominatim was rate-limiting us; it finished with
+  // every lookup timed out and wrote an empty array over 56 verified areas.
+  // Refuse to write unless the result is at least as complete as what's there.
+  let existingCount = 0;
+  try {
+    existingCount = (fs.readFileSync(dest, 'utf8').match(/roadKm:/g) || []).length;
+  } catch {
+    /* first run */
+  }
+  if (resolved.length === 0) {
+    console.error('\nABORT: resolved 0 areas — refusing to overwrite existing data.');
+    process.exitCode = 1;
+    return;
+  }
+  if (existingCount > 0 && resolved.length < existingCount * 0.9) {
+    console.error(
+      `\nABORT: only ${resolved.length} areas resolved but the existing file has ` +
+        `${existingCount}. Refusing to overwrite. Rerun with --refresh once the ` +
+        'geocoder is responding, or pass --force to override.',
+    );
+    if (!process.argv.includes('--force')) {
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   fs.writeFileSync(dest, out, 'utf8');
   console.log(`\nWrote ${resolved.length} areas to ${dest}`);
 })();

@@ -2,6 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AddressValidationService } from './address-validation.service';
 import { matchIbadanArea } from './ibadan-areas.util';
+import { OrsClient } from './ors.client';
+import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 
 export interface DeliveryQuote {
   /** Naira amount to add to the order total. */
@@ -28,7 +31,14 @@ export class DeliveryPricingService {
   constructor(
     private readonly config: ConfigService,
     private readonly addressValidation: AddressValidationService,
+    private readonly ors: OrsClient,
+    private readonly prisma: PrismaService,
   ) {}
+
+  /** Cache key: case and punctuation shouldn't create duplicate lookups. */
+  private normalizeAddress(address: string): string {
+    return address.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  }
 
   private get rates() {
     return {
@@ -107,6 +117,81 @@ export class DeliveryPricingService {
     };
   }
 
+  /**
+   * Geocodes an unrecognised address and routes it for real driving distance.
+   *
+   * Returns null unless both steps genuinely succeed. OrsClient already
+   * rejects city-centroid fallbacks and out-of-Ibadan hits, so reaching here
+   * with a coordinate means it's a real, specific place.
+   */
+  private async quoteByLiveLookup(
+    address: string,
+  ): Promise<DeliveryQuote | null> {
+    const hit = await this.ors.geocode(address);
+    if (!hit) return null;
+
+    const { originLat, originLng, roadFactor } = this.rates;
+    const routed = await this.ors.drivingDistanceKm(
+      { lat: originLat, lng: originLng },
+      { lat: hit.lat, lng: hit.lng },
+    );
+
+    // If routing is unavailable we still have a trustworthy coordinate, so
+    // approximate rather than throwing the lookup away.
+    const distanceKm =
+      routed != null
+        ? Math.round(routed * 100) / 100
+        : Math.round(
+            this.haversineKm(originLat, originLng, hit.lat, hit.lng) *
+              roadFactor *
+              100,
+          ) / 100;
+
+    this.logger.log(
+      `Priced "${address}" via live lookup → "${hit.label}" (${hit.layer}) — ` +
+        `${distanceKm}km${routed == null ? ' (approximated, routing unavailable)' : ''}`,
+    );
+
+    return {
+      fee: this.feeForDistanceKm(distanceKm),
+      distanceKm,
+      lat: hit.lat,
+      lng: hit.lng,
+      formattedAddress: hit.label,
+      estimated: routed == null,
+      serviceable: true,
+    };
+  }
+
+  /** Best-effort cache write; a failure here must never break checkout. */
+  private async cacheResult(
+    normalized: string,
+    rawAddress: string,
+    quote: DeliveryQuote,
+    source: string,
+  ): Promise<void> {
+    if (quote.lat == null || quote.lng == null || quote.distanceKm == null) {
+      return;
+    }
+    try {
+      await this.prisma.geocodeCache.upsert({
+        where: { normalized },
+        create: {
+          normalized,
+          rawAddress,
+          lat: quote.lat,
+          lng: quote.lng,
+          label: quote.formattedAddress,
+          distanceKm: new Prisma.Decimal(quote.distanceKm.toFixed(2)),
+          source,
+        },
+        update: {},
+      });
+    } catch (err) {
+      this.logger.warn(`Geocode cache write failed: ${(err as Error).message}`);
+    }
+  }
+
   /** Quote directly from coordinates we already hold. */
   quoteForCoords(lat: number, lng: number, formattedAddress = ''): DeliveryQuote {
     const distanceKm = this.distanceFromOriginKm(lat, lng);
@@ -148,14 +233,45 @@ export class DeliveryPricingService {
 
     if (!address || !address.trim()) return fallback(false);
 
-    // Named-area match first: it's free, instant, needs no API key, and for
-    // landmark-style addresses it beats asking a geocoder to parse the street.
+    // 1. Cache. Addresses repeat heavily, so this is the common path.
+    const normalized = this.normalizeAddress(address);
+    try {
+      const cached = await this.prisma.geocodeCache.findUnique({
+        where: { normalized },
+      });
+      if (cached) {
+        const distanceKm = Number(cached.distanceKm);
+        return {
+          fee: this.feeForDistanceKm(distanceKm),
+          distanceKm,
+          lat: cached.lat,
+          lng: cached.lng,
+          formattedAddress: cached.label || address,
+          estimated: false,
+          serviceable: true,
+        };
+      }
+    } catch (err) {
+      this.logger.warn(`Geocode cache read failed: ${(err as Error).message}`);
+    }
+
+    // 2. Named-area match: instant, free, and built from verified coordinates
+    // with real routed distances. Best for the landmark-style addresses
+    // customers actually send.
     const named = this.quoteForNamedArea(address);
     if (named) {
       this.logger.log(
         `Priced "${address}" via area "${named.neighborhood}" — ${named.distanceKm}km, ₦${named.fee}`,
       );
+      await this.cacheResult(normalized, address, named, 'area');
       return named;
+    }
+
+    // 3. Live lookup for anything we don't recognise: geocode, then route.
+    const live = await this.quoteByLiveLookup(address);
+    if (live) {
+      await this.cacheResult(normalized, address, live, 'ors');
+      return live;
     }
 
     let validated: Awaited<

@@ -83,6 +83,21 @@ Your job each turn:
     mapsApiKey:
       process.env.GOOGLE_MAPS_API_KEY ?? process.env.GOOGLE_API_KEY ?? '',
   },
+  ors: {
+    apiKey: process.env.ORS_API_KEY ?? '',
+    // api.openrouteservice.org is being deprecated in favour of api.heigit.org;
+    // both are tried in order so the switchover can't break pricing.
+    baseUrls: (
+      process.env.ORS_BASE_URLS ??
+      'https://api.openrouteservice.org,https://api.heigit.org'
+    )
+      .split(',')
+      .map((u) => u.trim().replace(/\/$/, ''))
+      .filter(Boolean),
+    tlsInsecure:
+      process.env.ORS_TLS_INSECURE === 'true' ||
+      (process.env.NODE_ENV ?? 'development') !== 'production',
+  },
   // Distance-based delivery pricing. Origin is Bodija Market, Ibadan — every
   // fee is measured from there. Rates are env-tunable so pricing can change
   // without a code deploy.

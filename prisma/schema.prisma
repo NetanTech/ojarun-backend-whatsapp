@@ -229,6 +229,26 @@ enum PromoDiscountType {
   fixed
 }
 
+/// Resolved address -> coordinates + driving distance from the market.
+/// Addresses repeat constantly (same customers, same estates), so caching keeps
+/// the ORS free quota almost untouched and makes repeat checkouts instant.
+model GeocodeCache {
+  id           String   @id @default(uuid()) @db.Uuid
+  /// Lowercased, punctuation-stripped address used as the lookup key.
+  normalized   String   @unique
+  rawAddress   String   @map("raw_address")
+  lat          Float
+  lng          Float
+  label        String?
+  /// Driving km from the delivery origin.
+  distanceKm   Decimal  @map("distance_km") @db.Decimal(6, 2)
+  /// Which path produced this: "area" | "ors" | "google".
+  source       String
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("geocode_cache")
+}
+
 model PromoCode {
   id               String            @id @default(uuid()) @db.Uuid
   code             String            @unique
