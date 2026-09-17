@@ -79,4 +79,6 @@ export const IBADAN_AREA_COORDS: IbadanArea[] = [
   { name: "Agodi Gardens", lat: 7.4093254, lng: 3.8982644, roadKm: 5.62 },
   { name: "Alakia", lat: 7.3908284, lng: 3.9738165, roadKm: 10.14 },
   { name: "Egbeda", lat: 7.3926447, lng: 4.0387216, roadKm: 18.43 },
+  { name: "Apete", lat: 7.450043, lng: 3.87046, roadKm: 9.39 },
+  { name: "Awotan", lat: 7.450043, lng: 3.87046, roadKm: 9.39 },
 ];

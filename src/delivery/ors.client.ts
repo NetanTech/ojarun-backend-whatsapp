@@ -28,6 +28,27 @@ const IBADAN_BOUNDS = { south: 7.15, north: 7.65, west: 3.7, east: 4.1 };
  */
 const UNTRUSTWORTHY_MATCH_TYPES = new Set(['fallback']);
 
+/**
+ * Generic address furniture. These carry no location meaning, but a geocoder
+ * will happily match on them: "House 14, Ologuneru road" returned a venue
+ * called "DG house" 9km away because it matched the word "house". Comparing
+ * only the meaningful words catches that.
+ */
+const ADDRESS_STOPWORDS = new Set([
+  'house', 'street', 'road', 'close', 'avenue', 'estate', 'lane', 'way',
+  'junction', 'roundabout', 'bus', 'stop', 'block', 'flat', 'plot', 'apartment',
+  'opposite', 'behind', 'beside', 'near', 'off', 'the', 'and', 'for',
+  'ibadan', 'oyo', 'nigeria', 'state', 'express', 'expressway', 'area',
+]);
+
+const significantTokens = (text: string): Set<string> =>
+  new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length >= 3 && !ADDRESS_STOPWORDS.has(t) && !/^\d+$/.test(t)),
+  );
+
 /** City/region-level layers are too coarse to price a delivery from. */
 const COARSE_LAYERS = new Set([
   'locality',
@@ -132,6 +153,23 @@ export class OrsClient {
           this.logger.debug(
             `Geocode for "${address}" landed outside Ibadan (${lat}, ${lng}) — rejected`,
           );
+          return null;
+        }
+
+        // The result must actually relate to what was asked for. When the
+        // query has no meaningful words left (e.g. "Oyo road"), there's
+        // nothing to compare, so fall back to trusting an exact match only.
+        const wanted = significantTokens(address);
+        const got = significantTokens(props.label ?? '');
+        if (wanted.size > 0) {
+          const shared = [...wanted].some((t) => got.has(t));
+          if (!shared) {
+            this.logger.debug(
+              `Geocode for "${address}" returned unrelated "${props.label}" — rejected`,
+            );
+            return null;
+          }
+        } else if (props.match_type !== 'exact') {
           return null;
         }
 

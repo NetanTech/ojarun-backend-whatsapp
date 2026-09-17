@@ -78,6 +78,13 @@ const AREAS = [
   'Lekan Salami Stadium', 'Cocoa House', 'Mapo Hall', 'Agodi Gardens',
   { name: 'Alakia', query: 'Alakia, Oyo, Nigeria' },
   { name: 'Egbeda', query: 'Egbeda, Oyo State, Nigeria' },
+  // Common areas found missing when checking coverage against real phrasings.
+  { name: 'Ajibode', query: 'Ajibode, Ibadan, Oyo, Nigeria' },
+  { name: 'Sabo', query: 'Sabo, Mokola, Ibadan, Nigeria' },
+  { name: 'Ologuneru', query: 'Ologuneru, Ibadan, Oyo, Nigeria' },
+  { name: 'Apete', query: 'Apete, Ibadan, Oyo, Nigeria' },
+  { name: 'Awotan', query: 'Awotan, Ibadan, Oyo, Nigeria' },
+  { name: 'Idi Ishin', query: 'Idi Ishin, Ibadan, Oyo, Nigeria' },
 ];
 
 /**
@@ -215,6 +222,24 @@ function fetchRoadDistances(areas, apiKey) {
 // --refresh to force a fresh lookup.
 const CACHE_PATH = path.join(__dirname, '.cache-ibadan-coords.json');
 
+/**
+ * Returns cached coordinates keyed by name. Partial hits are fine: the caller
+ * only looks up the names that are missing, so adding an area costs one
+ * request instead of re-running the whole rate-limited pass.
+ */
+function loadCacheMap() {
+  if (process.argv.includes('--refresh')) return new Map();
+  try {
+    const raw = JSON.parse(fs.readFileSync(CACHE_PATH, 'utf8'));
+    if (Array.isArray(raw)) {
+      return new Map(raw.filter((r) => r && r.name).map((r) => [r.name, r]));
+    }
+  } catch {
+    /* no cache yet */
+  }
+  return new Map();
+}
+
 function loadCache() {
   if (process.argv.includes('--refresh')) return null;
   try {
@@ -240,13 +265,19 @@ function loadCache() {
   const resolved = [];
   const skipped = [];
 
-  const cached = loadCache();
-  if (cached) {
-    console.log(`Using cached coordinates for ${cached.length} areas.`);
-    resolved.push(...cached.map((c) => ({ ...c })));
+  const cacheMap = loadCacheMap();
+  const pending = [];
+  for (const entry of AREAS) {
+    const name = typeof entry === 'string' ? entry : entry.name;
+    const hit = cacheMap.get(name);
+    if (hit) resolved.push({ ...hit });
+    else pending.push(entry);
   }
+  console.log(
+    `Cached: ${resolved.length}. Need lookup: ${pending.length}.`,
+  );
 
-  for (const entry of cached ? [] : AREAS) {
+  for (const entry of pending) {
     const name = typeof entry === 'string' ? entry : entry.name;
     try {
       const hit = await lookup(entry);
@@ -268,7 +299,7 @@ function loadCache() {
   skipped.forEach((s) => console.log(`skip ${s}`));
 
   // Same protection for the cache: an interrupted run must not empty it.
-  if (!cached && resolved.length > 0) {
+  if (resolved.length > 0) {
     fs.writeFileSync(
       CACHE_PATH,
       JSON.stringify(
