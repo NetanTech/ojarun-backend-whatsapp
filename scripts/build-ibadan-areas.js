@@ -109,6 +109,25 @@ async function lookup(entry) {
   return { lat, lng, display: json[0].display_name };
 }
 
+/**
+ * Reads a single value out of the local .env, so the key can stay in that file
+ * (which is gitignored) instead of being passed through a shell command where
+ * it would land in history and process listings. Never logged.
+ */
+function readEnvKey(name) {
+  try {
+    const envPath = path.join(__dirname, '..', '.env');
+    const line = fs
+      .readFileSync(envPath, 'utf8')
+      .split(/\r?\n/)
+      .find((l) => l.trim().startsWith(`${name}=`));
+    if (!line) return null;
+    return line.slice(line.indexOf('=') + 1).trim().replace(/^["']|["']$/g, '');
+  } catch {
+    return null;
+  }
+}
+
 const haversineKm = (a, b) => {
   const R = 6371;
   const toRad = (d) => (d * Math.PI) / 180;
@@ -245,7 +264,7 @@ function loadCache() {
   }
 
   // Phase 2: real driving distance from the market to each area.
-  const apiKey = process.env.ORS_API_KEY;
+  const apiKey = process.env.ORS_API_KEY || readEnvKey('ORS_API_KEY');
   let approximated = 0;
   if (!apiKey) {
     console.warn(
