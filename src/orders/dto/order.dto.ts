@@ -4,6 +4,7 @@ import {
   ValidateNested,
   IsNumber,
   Min,
+  Max,
   IsUUID,
   IsIn,
   IsEnum,
@@ -75,6 +76,19 @@ export class CreateOrderDto {
   @MinLength(2)
   @MaxLength(500)
   deliveryAddress!: string;
+
+  /** Map pin — required for distance-based delivery pricing. */
+  @Type(() => Number)
+  @IsNumber()
+  @Min(7.15)
+  @Max(7.65)
+  lat!: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(3.7)
+  @Max(4.1)
+  lng!: number;
 
   @IsOptional()
   @IsString()

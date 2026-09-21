@@ -214,6 +214,9 @@ model CustomerAddress {
   label      String?
   address    String
   landmark   String?
+  /// Map pin used for distance-based delivery pricing.
+  lat        Float?
+  lng        Float?
   isDefault  Boolean  @default(false) @map("is_default")
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)

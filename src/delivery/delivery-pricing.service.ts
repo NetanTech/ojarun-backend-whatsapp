@@ -192,16 +192,62 @@ export class DeliveryPricingService {
     }
   }
 
-  /** Quote directly from coordinates we already hold. */
-  quoteForCoords(lat: number, lng: number, formattedAddress = ''): DeliveryQuote {
-    const distanceKm = this.distanceFromOriginKm(lat, lng);
+  /**
+   * Pin-first pricing: real road distance from Bodija to the customer's pin.
+   * This is the only path web + WhatsApp should use for billing.
+   */
+  async quoteForCoords(
+    lat: number,
+    lng: number,
+    formattedAddress = '',
+  ): Promise<DeliveryQuote> {
+    if (!OrsClient.isInIbadan(lat, lng)) {
+      return {
+        fee: 0,
+        distanceKm: null,
+        lat,
+        lng,
+        formattedAddress,
+        estimated: false,
+        serviceable: false,
+      };
+    }
+
+    const { originLat, originLng, roadFactor } = this.rates;
+    const routed = await this.ors.drivingDistanceKm(
+      { lat: originLat, lng: originLng },
+      { lat, lng },
+    );
+
+    const distanceKm =
+      routed != null
+        ? Math.round(routed * 100) / 100
+        : Math.round(
+            this.haversineKm(originLat, originLng, lat, lng) * roadFactor * 100,
+          ) / 100;
+
+    // Hard cap so a pin on the edge of the city bounds can't produce a
+    // runaway fee (or an impossible ride) even when ORS returns a long path.
+    const maxKm = this.config.get<number>('delivery.maxKm') ?? 35;
+    if (distanceKm > maxKm) {
+      return {
+        fee: 0,
+        distanceKm,
+        lat,
+        lng,
+        formattedAddress,
+        estimated: routed == null,
+        serviceable: false,
+      };
+    }
+
     return {
       fee: this.feeForDistanceKm(distanceKm),
       distanceKm,
       lat,
       lng,
       formattedAddress,
-      estimated: false,
+      estimated: routed == null,
       serviceable: true,
     };
   }

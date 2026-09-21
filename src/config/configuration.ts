@@ -118,6 +118,8 @@ Your job each turn:
     // Charged when we can't geocode the address (no key, API down, vague
     // landmark). Matches the old flat fee so nobody is over-charged blindly.
     fallbackFeeNaira: parseInt(process.env.DELIVERY_FALLBACK_FEE ?? '700', 10),
+    // Pins farther than this from Bodija are rejected (out of service area).
+    maxKm: parseFloat(process.env.DELIVERY_MAX_KM ?? '35'),
   },
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME ?? '',

@@ -35,6 +35,8 @@ export class AddressesService {
         label: dto.label?.trim(),
         address: dto.address.trim(),
         landmark: dto.landmark?.trim(),
+        lat: dto.lat,
+        lng: dto.lng,
         isDefault: makeDefault,
       },
     });
@@ -51,6 +53,8 @@ export class AddressesService {
         ...(dto.label !== undefined ? { label: dto.label?.trim() } : {}),
         ...(dto.address !== undefined ? { address: dto.address.trim() } : {}),
         ...(dto.landmark !== undefined ? { landmark: dto.landmark?.trim() } : {}),
+        ...(dto.lat !== undefined ? { lat: dto.lat } : {}),
+        ...(dto.lng !== undefined ? { lng: dto.lng } : {}),
         ...(dto.isDefault !== undefined ? { isDefault: dto.isDefault } : {}),
       },
     });

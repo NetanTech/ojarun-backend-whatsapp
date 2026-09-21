@@ -95,17 +95,19 @@ export class OrdersService {
       discountAmount = result.discountAmount;
     }
 
-    // Always re-quoted server-side. The checkout UI asks for a quote first so
-    // it can show the fee, but that number is never trusted for billing.
-    const deliveryQuote = await this.deliveryPricing.quoteForAddress(
+    // Always re-quoted server-side from the pin. The checkout UI shows a
+    // preview fee, but that number is never trusted for billing.
+    const deliveryQuote = await this.deliveryPricing.quoteForCoords(
+      dto.lat,
+      dto.lng,
       dto.deliveryAddress,
     );
     if (!deliveryQuote.serviceable) {
       this.logger.warn(
-        `Rejected order for customer ${customerId}: address outside the delivery area — "${dto.deliveryAddress}"`,
+        `Rejected order for customer ${customerId}: pin outside delivery area — ${dto.lat},${dto.lng} "${dto.deliveryAddress}"`,
       );
       throw new BadRequestException(
-        'We only deliver within Ibadan for now. Please use an Ibadan address with a nearby landmark.',
+        'We only deliver within Ibadan for now. Move the pin to your drop-off point inside Ibadan.',
       );
     }
     const deliveryFee = deliveryQuote.fee;

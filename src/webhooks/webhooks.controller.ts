@@ -861,12 +861,35 @@ export class WebhooksController {
       return;
     }
 
+    // Pin-first delivery: a shared WhatsApp location is the source of truth
+    // for the drop-off point. Text landmarks become optional rider notes.
+    if (msg.type === "location" && msg.location) {
+      const { latitude, longitude, name, address } = msg.location;
+      if (
+        typeof latitude === "number" &&
+        typeof longitude === "number" &&
+        Number.isFinite(latitude) &&
+        Number.isFinite(longitude)
+      ) {
+        await this.handleLocationPin(
+          customer.id,
+          conversation.id,
+          whatsappNumber,
+          latitude,
+          longitude,
+          name || address || undefined,
+        );
+        await this.conversations.touch(conversation.id);
+        return;
+      }
+    }
+
     if (!processedText) {
       await this.sendAndLog(
         customer.id,
         conversation.id,
         whatsappNumber,
-        `Please type your shopping list as text (e.g. "2 congo rice, 1kg turkey") and I'll quote today's prices.`,
+        `Please type your shopping list as text (e.g. "2 congo rice, 1kg turkey") and I'll quote today's prices.\n\nWhen you're ready to confirm, share your *location pin* so we can price delivery.`,
       );
       return;
     }
@@ -1001,8 +1024,6 @@ export class WebhooksController {
             formatted: result.validatedAddress.formatted,
             neighborhood: result.validatedAddress.neighborhood,
             landmark: result.validatedAddress.landmark,
-            lat: result.validatedAddress.lat,
-            lng: result.validatedAddress.lng,
           },
         );
 
@@ -1010,13 +1031,9 @@ export class WebhooksController {
         const addressInfo = await this.conversations.getDeliveryAddress(
           conversation.id,
         );
-        let draftSummary = `Noted! Here's your list so far:\n\n`;
+        let draftSummary = `Noted your address note:\n📍 ${addressInfo.formatted || addressInfo.address}\n\n`;
         draftSummary += await this.formatDraftItemLines(updatedDraft.items);
-        draftSummary += `\n📍 *Delivery to:* ${addressInfo.formatted || addressInfo.address}`;
-        if (addressInfo.neighborhood) {
-          draftSummary += `\n📍 *Area:* ${addressInfo.neighborhood}`;
-        }
-        draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
+        draftSummary += `\n\nTo calculate delivery, share your *WhatsApp location pin* (paperclip → Location), then say *"that's all"* when you're ready.`;
         await this.sendAndLog(
           customer.id,
           conversation.id,
@@ -1213,7 +1230,7 @@ export class WebhooksController {
       cartSummary += await this.formatDraftItemLines(existingDraft.items);
       cartSummary += existingDraft.deliveryAddress
         ? `\n📍 Delivery to: ${existingDraft.deliveryAddress}`
-        : `\n⚠️ Still need your delivery address.`;
+        : `\n⚠️ Still need your location pin (paperclip → Location).`;
       cartSummary += `\n\nChange anything with *"remove turkey"* or *"rice 3 congo"*. Say *"that's all"* when you're ready.`;
       await this.sendAndLog(
         customerId,
@@ -1307,7 +1324,7 @@ export class WebhooksController {
         } else if (deliveryAddress) {
           draftSummary += `\n📍 *Delivery to:* ${deliveryAddress}`;
         } else {
-          draftSummary += `\n⚠️ Still need your delivery address — just drop it whenever you're ready.`;
+          draftSummary += `\n⚠️ Still need your location pin — share it via WhatsApp Location when you're ready.`;
         }
 
         draftSummary += `\n\nChange anything with *"remove turkey"* or *"rice 3 congo"*. Say *"that's all"* when you're ready to confirm.`;
@@ -1385,7 +1402,17 @@ export class WebhooksController {
         customerId,
         conversationId,
         whatsappNumber,
-        `Almost there! 📍 I still need your delivery address before I can place this order — just drop it and say *"that's all"* again to confirm.`,
+        `Almost there! 📍 Share your *WhatsApp location pin* (paperclip → Location → Send your current location) so we can price delivery, then say *"that's all"* again.`,
+      );
+      return;
+    }
+
+    if (addressInfo.lat == null || addressInfo.lng == null) {
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        `I have your address text, but I still need the *map pin* to calculate delivery.\n\nShare your location (paperclip → Location) then say *"that's all"* again.`,
       );
       return;
     }
@@ -1399,26 +1426,21 @@ export class WebhooksController {
       0,
     );
 
-    // Price the ride from the market. Reuse the coordinates captured when the
-    // address was first validated so we don't pay for a second geocode.
-    const deliveryQuote =
-      addressInfo.lat != null && addressInfo.lng != null
-        ? this.deliveryPricing.quoteForCoords(
-            addressInfo.lat,
-            addressInfo.lng,
-            finalAddress ?? "",
-          )
-        : await this.deliveryPricing.quoteForAddress(finalAddress ?? "");
+    const deliveryQuote = await this.deliveryPricing.quoteForCoords(
+      addressInfo.lat,
+      addressInfo.lng,
+      finalAddress ?? "",
+    );
 
     if (!deliveryQuote.serviceable) {
       this.logger.warn(
-        `Blocked WhatsApp order for ${whatsappNumber}: address outside delivery area — "${finalAddress}"`,
+        `Blocked WhatsApp order for ${whatsappNumber}: pin outside delivery area — ${addressInfo.lat},${addressInfo.lng} "${finalAddress}"`,
       );
       await this.sendAndLog(
         customerId,
         conversationId,
         whatsappNumber,
-        `Sorry oh, we only deliver within Ibadan for now 📍\n\nSend an Ibadan address with a landmark (e.g. "Bodija, near UI gate") and say *"that's all"* again to confirm.`,
+        `Sorry oh, that pin is outside our Ibadan delivery area 📍\n\nShare a location pin inside Ibadan and say *"that's all"* again to confirm.`,
       );
       return;
     }
@@ -1624,6 +1646,59 @@ export class WebhooksController {
     );
   }
 
+  /**
+   * Accept a WhatsApp location pin as the delivery drop-off. Quotes the ride
+   * immediately so the customer sees the fee before they confirm.
+   */
+  private async handleLocationPin(
+    customerId: string,
+    conversationId: string,
+    whatsappNumber: string,
+    lat: number,
+    lng: number,
+    label?: string,
+  ): Promise<void> {
+    const formatted =
+      label?.trim() ||
+      `Pin ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+
+    const quote = await this.deliveryPricing.quoteForCoords(lat, lng, formatted);
+
+    if (!quote.serviceable) {
+      await this.sendAndLog(
+        customerId,
+        conversationId,
+        whatsappNumber,
+        `That pin is outside our Ibadan delivery area 📍\n\nPlease share a location inside Ibadan and try again.`,
+      );
+      return;
+    }
+
+    await this.conversations.setDeliveryAddress(conversationId, formatted, {
+      formatted,
+      lat,
+      lng,
+    });
+
+    const draft = await this.getSanitizedDraft(conversationId);
+    let reply = `📍 *Location saved*\n${formatted}\n`;
+    reply += `Delivery: *₦${quote.fee.toLocaleString()}*`;
+    if (quote.distanceKm != null) {
+      reply += ` (~${quote.distanceKm} km from Bodija)`;
+    }
+    reply += `\n`;
+
+    if (draft.items.length === 0) {
+      reply += `\nSend the items you want to buy, then say *"that's all"* when you're ready.`;
+    } else {
+      reply += `\nYour list so far:\n`;
+      reply += await this.formatDraftItemLines(draft.items);
+      reply += `\nAdd more items anytime, or say *"that's all"* to confirm.`;
+    }
+
+    await this.sendAndLog(customerId, conversationId, whatsappNumber, reply);
+  }
+
   private async handleAddressInput(
     customerId: string,
     conversationId: string,
@@ -1644,6 +1719,8 @@ export class WebhooksController {
     }
 
     if (result.validatedAddress) {
+      // Text is a rider note only. Pricing requires a real WhatsApp location
+      // pin — never bill from a geocoded guess of free-text.
       await this.conversations.setDeliveryAddress(
         conversationId,
         result.validatedAddress.fullAddress,
@@ -1651,8 +1728,6 @@ export class WebhooksController {
           formatted: result.validatedAddress.formatted,
           neighborhood: result.validatedAddress.neighborhood,
           landmark: result.validatedAddress.landmark,
-          lat: result.validatedAddress.lat,
-          lng: result.validatedAddress.lng,
         },
       );
 
@@ -1660,7 +1735,8 @@ export class WebhooksController {
       const addressInfo =
         await this.conversations.getDeliveryAddress(conversationId);
 
-      let draftSummary = `Noted! Here's your list so far:\n\n`;
+      let draftSummary = `Noted your address note:\n📍 ${addressInfo.formatted || addressInfo.address}\n\n`;
+      draftSummary += `To calculate delivery, share your *WhatsApp location pin* (paperclip → Location).\n\n`;
 
       if (draft.items.length === 0) {
         draftSummary += `(No items yet — send what you'd like to buy.)\n`;
@@ -1669,13 +1745,7 @@ export class WebhooksController {
         draftSummary += `\n`;
       }
 
-      draftSummary += `\n📍 *Delivery to:* ${addressInfo.formatted || addressInfo.address}`;
-
-      if (addressInfo.neighborhood) {
-        draftSummary += `\n📍 *Area:* ${addressInfo.neighborhood}`;
-      }
-
-      draftSummary += `\n\nAdd more items anytime, or say *"that's all"* when you're ready to confirm.`;
+      draftSummary += `\nAdd more items anytime, or share your pin then say *"that's all"* to confirm.`;
 
       await this.sendAndLog(
         customerId,
