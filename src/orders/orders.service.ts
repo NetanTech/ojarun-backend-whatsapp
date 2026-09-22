@@ -15,6 +15,8 @@ import { PromoCodesService } from '../promo-codes/promo-codes.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RewardsService } from '../rewards/rewards.service';
 import { DeliveryPricingService } from '../delivery/delivery-pricing.service';
+import { AssignmentsService } from '../assignments/assignments.service';
+import { AuthAdmin } from '../auth/current-admin.decorator';
 import {
   CreateOrderDto,
   ListOrdersQueryDto,
@@ -41,6 +43,7 @@ export class OrdersService {
     private readonly notifications: NotificationsService,
     private readonly rewards: RewardsService,
     private readonly deliveryPricing: DeliveryPricingService,
+    private readonly assignments: AssignmentsService,
   ) {}
 
   private get serviceFeeNaira(): number {
@@ -302,6 +305,7 @@ export class OrdersService {
       id.slice(0, 8).toUpperCase(),
       OrderStatus.cancelled,
     );
+    await this.assignments.markReleasedForOrder(id);
     return this.serializeForCustomer(updated);
   }
 
@@ -333,6 +337,7 @@ export class OrdersService {
       id.slice(0, 8).toUpperCase(),
       OrderStatus.delivered,
     );
+    await this.assignments.markCompletedForOrder(id);
     await this.rewards.awardForDeliveredOrder(id);
     return this.serializeForCustomer(updated);
   }
@@ -468,11 +473,20 @@ export class OrdersService {
       },
     });
     if (!order) throw new NotFoundException('Order not found');
-    return this.serializeDetail(order);
+    const detail = this.serializeDetail(order);
+    const claim = await this.assignments.getActiveClaim(id);
+    return { ...detail, assignment: claim };
   }
 
-  async updateStatus(id: string, dto: UpdateOrderStatusDto) {
+  async updateStatus(
+    id: string,
+    dto: UpdateOrderStatusDto,
+    admin?: AuthAdmin,
+  ) {
     await this.ensureExists(id);
+    if (admin) {
+      await this.assignments.assertCanUpdateOrder(id, admin);
+    }
     const order = await this.prisma.order.update({
       where: { id },
       data: { status: dto.status },
@@ -489,14 +503,26 @@ export class OrdersService {
       order.id.slice(0, 8).toUpperCase(),
       order.status,
     );
+    if (
+      order.status === OrderStatus.shopping ||
+      order.status === OrderStatus.purchased ||
+      order.status === OrderStatus.dispatched
+    ) {
+      await this.assignments.markInProgressForOrder(order.id);
+    }
     if (order.status === OrderStatus.delivered) {
+      await this.assignments.markCompletedForOrder(order.id);
       await this.rewards.awardForDeliveredOrder(order.id);
     }
-    return this.serializeDetail(order);
+    if (order.status === OrderStatus.cancelled) {
+      await this.assignments.markReleasedForOrder(order.id);
+    }
+    const claim = await this.assignments.getActiveClaim(order.id);
+    return { ...this.serializeDetail(order), assignment: claim };
   }
 
-  async cancel(id: string) {
-    return this.updateStatus(id, { status: OrderStatus.cancelled });
+  async cancel(id: string, admin?: AuthAdmin) {
+    return this.updateStatus(id, { status: OrderStatus.cancelled }, admin);
   }
 
   private async ensureExists(id: string) {

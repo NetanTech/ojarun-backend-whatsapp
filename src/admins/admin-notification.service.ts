@@ -129,7 +129,8 @@ export class AdminNotificationService {
 
     const adminUrl = this.config.get<string>('adminAppUrl');
     if (adminUrl) {
-      message += `\n\n🔗 ${adminUrl.replace(/\/$/, '')}/orders`;
+      message += `\n\n🔗 Claim in queue: ${adminUrl.replace(/\/$/, '')}/orders`;
+      message += `\n_First agent to claim owns shopping + delivery._`;
     }
 
     return message;
@@ -164,15 +165,8 @@ export class AdminNotificationService {
         return false;
       }
 
-      await this.prisma.orderAssignment.create({
-        data: {
-          orderId,
-          adminId: admin.id,
-          status: 'pending',
-          notes: 'Auto-assigned from new order WhatsApp alert',
-        },
-      });
-
+      // Notify only — do not create an assignment. Agents claim exclusively
+      // via POST /assignments/order/:id/claim so two people cannot own one job.
       this.logger.log(
         `Order alert sent to ${admin.name} (${admin.whatsappNumber})`,
       );

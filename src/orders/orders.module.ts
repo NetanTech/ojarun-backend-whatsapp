@@ -11,6 +11,7 @@ import { PromoCodesModule } from '../promo-codes/promo-codes.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { RewardsModule } from '../rewards/rewards.module';
 import { DeliveryModule } from '../delivery/delivery.module';
+import { AssignmentsModule } from '../assignments/assignments.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { DeliveryModule } from '../delivery/delivery.module';
     NotificationsModule,
     RewardsModule,
     DeliveryModule,
+    AssignmentsModule,
   ],
   controllers: [
     OrdersController,
