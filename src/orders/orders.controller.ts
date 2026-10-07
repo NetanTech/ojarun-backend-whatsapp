@@ -11,6 +11,7 @@ import {
 import { OrdersService } from './orders.service';
 import { ListOrdersQueryDto, UpdateOrderStatusDto } from './dto/order.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { CurrentAdmin, AuthAdmin } from '../auth/current-admin.decorator';
 
 @Controller('orders')
 @UseGuards(JwtAuthGuard)
@@ -28,12 +29,16 @@ export class OrdersController {
   }
 
   @Patch(':id/status')
-  updateStatus(@Param('id') id: string, @Body() dto: UpdateOrderStatusDto) {
-    return this.orders.updateStatus(id, dto);
+  updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateOrderStatusDto,
+    @CurrentAdmin() admin: AuthAdmin,
+  ) {
+    return this.orders.updateStatus(id, dto, admin);
   }
 
   @Post(':id/cancel')
-  cancel(@Param('id') id: string) {
-    return this.orders.cancel(id);
+  cancel(@Param('id') id: string, @CurrentAdmin() admin: AuthAdmin) {
+    return this.orders.cancel(id, admin);
   }
 }
