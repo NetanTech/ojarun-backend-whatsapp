@@ -3,8 +3,27 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 
+type PublicProductRow = {
+  id: string;
+  name: string;
+  unit: string;
+  currentPrice: Prisma.Decimal;
+  isAvailable: boolean;
+  category: string | null;
+  imageUrl: string | null;
+};
+
+type CachedCatalog = {
+  at: number;
+  data: ReturnType<ProductsService['serializePublic']>[];
+};
+
 @Injectable()
 export class ProductsService {
+  /** Short in-memory cache so repeat marketplace hits don't wait on Postgres. */
+  private readonly publicCache = new Map<string, CachedCatalog>();
+  private static readonly PUBLIC_CACHE_TTL_MS = 30_000;
+
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll(search?: string) {
@@ -31,8 +50,20 @@ export class ProductsService {
     return this.serialize(product);
   }
 
-  /** Storefront browsing — no auth required, only ever shows available products. */
+  /**
+   * Storefront browsing — no auth, available products only.
+   * Slim payload + short cache so the marketplace feels instant.
+   */
   async findAllPublic(search?: string, category?: string) {
+    const cacheKey = `${(search ?? '').trim().toLowerCase()}|${(category ?? 'all').trim().toLowerCase()}`;
+    const cached = this.publicCache.get(cacheKey);
+    if (
+      cached &&
+      Date.now() - cached.at < ProductsService.PUBLIC_CACHE_TTL_MS
+    ) {
+      return cached.data;
+    }
+
     const where: Prisma.ProductWhereInput = { isAvailable: true };
     const and: Prisma.ProductWhereInput[] = [];
     if (search?.trim()) {
@@ -62,8 +93,21 @@ export class ProductsService {
     const products = await this.prisma.product.findMany({
       where,
       orderBy: { createdAt: 'desc' },
+      // Card UI never needs description / timestamps — smaller JSON = faster TTFB.
+      select: {
+        id: true,
+        name: true,
+        unit: true,
+        currentPrice: true,
+        isAvailable: true,
+        category: true,
+        imageUrl: true,
+      },
     });
-    return products.map((p) => this.serialize(p));
+
+    const data = products.map((p) => this.serializePublic(p));
+    this.publicCache.set(cacheKey, { at: Date.now(), data });
+    return data;
   }
 
   async findOnePublic(id: string) {
@@ -86,6 +130,7 @@ export class ProductsService {
         imageUrl: dto.imageUrl?.trim() || null,
       },
     });
+    this.bustPublicCache();
     return this.serialize(product);
   }
 
@@ -113,13 +158,32 @@ export class ProductsService {
           : {}),
       },
     });
+    this.bustPublicCache();
     return this.serialize(product);
   }
 
   async remove(id: string) {
     await this.findOne(id);
     await this.prisma.product.delete({ where: { id } });
+    this.bustPublicCache();
     return { message: 'Product deleted' };
+  }
+
+  private bustPublicCache() {
+    this.publicCache.clear();
+  }
+
+  private serializePublic(product: PublicProductRow) {
+    return {
+      id: product.id,
+      name: product.name,
+      unit: product.unit,
+      currentPrice: Number(product.currentPrice),
+      isAvailable: product.isAvailable,
+      category: product.category,
+      description: null as string | null,
+      imageUrl: product.imageUrl,
+    };
   }
 
   private serialize(product: {

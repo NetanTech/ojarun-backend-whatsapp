@@ -286,6 +286,9 @@ model Product {
   cartedBy          CartItem[]
   shoppingListItems CustomerShoppingListItem[]
 
+  @@index([isAvailable, createdAt(sort: Desc)])
+  @@index([category])
+  @@index([name])
   @@map("products")
 }
 
