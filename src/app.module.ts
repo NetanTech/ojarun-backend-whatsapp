@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 
 import configuration from './config/configuration';
 import { validateConfig } from './config/validation';
 
 import { PrismaModule } from './prisma/prisma.module';
+import { HealthModule } from './health/health.module';
 import { EmailModule } from './email/email.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
@@ -38,6 +40,8 @@ import { AssignmentsModule } from './assignments/assignments.module';
       load: [configuration],
       validate: validateConfig,
     }),
+    ScheduleModule.forRoot(),
+    HealthModule,
     PrismaModule,
     EmailModule,
     SmsModule,

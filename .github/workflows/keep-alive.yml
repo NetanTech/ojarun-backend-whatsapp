@@ -1,0 +1,26 @@
+# Render free web services sleep after ~15m with no inbound traffic.
+# This external ping counts as traffic so cold starts (~30s) stay rare.
+name: Keep API awake
+
+on:
+  schedule:
+    # Every 10 minutes
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health
+        env:
+          # Optional repo Variable PUBLIC_API_URL; falls back to current Render host.
+          API_URL: ${{ vars.PUBLIC_API_URL }}
+        run: |
+          set -e
+          API_URL="${API_URL:-https://ojarun-backend-whatsapp.onrender.com}"
+          echo "Pinging $API_URL/health"
+          curl -fsS --max-time 60 "$API_URL/health"
+          echo ""
+          echo "Pinging $API_URL/ready (DB)"
+          curl -fsS --max-time 90 "$API_URL/ready" || echo "ready check failed (non-fatal for keep-alive)"

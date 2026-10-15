@@ -1,0 +1,12 @@
+# Optional Blueprint for Render. healthCheckPath uses the lightweight /health route.
+services:
+  - type: web
+    name: ojarun-backend-whatsapp
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
