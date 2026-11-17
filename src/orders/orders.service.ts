@@ -352,6 +352,8 @@ export class OrdersService {
     agentFee: Prisma.Decimal;
     deliveryFee: Prisma.Decimal;
     deliveryDistanceKm: Prisma.Decimal | null;
+    deliveryLat: number | null;
+    deliveryLng: number | null;
     discountAmount: Prisma.Decimal;
     cancelReason: string | null;
     customerNotes: string | null;
@@ -430,7 +432,49 @@ export class OrdersService {
         delivered: order.status === OrderStatus.delivered,
       },
       market: 'Ojarun Market',
+      // Drives the order tracking map. There is no live rider GPS yet, so the
+      // map shows the market, the delivery pin and how far along the order is.
+      tracking: {
+        stage: this.trackingStage(order.status),
+        pickup: {
+          name:
+            this.config.get<string>('delivery.originName') ??
+            'Bodija Market, Ibadan',
+          lat: this.config.get<number>('delivery.originLat') ?? 7.4359015,
+          lng: this.config.get<number>('delivery.originLng') ?? 3.9157404,
+        },
+        destination:
+          order.deliveryLat != null && order.deliveryLng != null
+            ? { lat: order.deliveryLat, lng: order.deliveryLng }
+            : null,
+      },
     };
+  }
+
+  private trackingStage(
+    status: OrderStatus,
+  ):
+    | 'received'
+    | 'shopping'
+    | 'ready'
+    | 'on_the_way'
+    | 'delivered'
+    | 'cancelled' {
+    switch (status) {
+      case OrderStatus.confirmed:
+      case OrderStatus.shopping:
+        return 'shopping';
+      case OrderStatus.purchased:
+        return 'ready';
+      case OrderStatus.dispatched:
+        return 'on_the_way';
+      case OrderStatus.delivered:
+        return 'delivered';
+      case OrderStatus.cancelled:
+        return 'cancelled';
+      default:
+        return 'received';
+    }
   }
 
   async findAll(query: ListOrdersQueryDto) {
