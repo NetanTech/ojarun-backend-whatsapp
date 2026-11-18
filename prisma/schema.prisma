@@ -80,6 +80,7 @@ model Customer {
   emailVerifiedAt         DateTime?              @map("email_verified_at") @db.Timestamptz(6)
   deliveryArea            String?                @map("delivery_area")
   avatarUrl               String?                @map("avatar_url")
+  termsAcceptedAt         DateTime?              @map("terms_accepted_at") @db.Timestamptz(6)
   deactivatedAt           DateTime?              @map("deactivated_at") @db.Timestamptz(6)
   createdAt               DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt               DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)

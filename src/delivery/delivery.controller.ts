@@ -1,8 +1,9 @@
-import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Post, UseGuards } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DeliveryPricingService } from './delivery-pricing.service';
 import { DeliveryQuoteDto } from './dto/delivery-quote.dto';
 import { CustomerJwtAuthGuard } from '../customer-auth/customer-jwt-auth.guard';
+import { IBADAN_AREA_COORDS } from './ibadan-areas.data';
 
 @Controller('delivery')
 @UseGuards(CustomerJwtAuthGuard)
@@ -11,6 +12,19 @@ export class DeliveryController {
     private readonly pricing: DeliveryPricingService,
     private readonly config: ConfigService,
   ) {}
+
+  /**
+   * Ibadan areas the checkout can offer instead of a map pin. Picking one
+   * uses the area's centre for pricing, the same point the address matcher
+   * uses for typed addresses.
+   */
+  @Get('areas')
+  @Header('Cache-Control', 'private, max-age=3600')
+  areas() {
+    return IBADAN_AREA_COORDS.map(({ name, lat, lng }) => ({ name, lat, lng })).sort(
+      (a, b) => a.name.localeCompare(b.name),
+    );
+  }
 
   /**
    * Prices a delivery from a map pin before checkout. createFromWeb re-quotes

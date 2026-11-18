@@ -92,6 +92,7 @@ export class CustomerAuthService {
           passwordHash,
           deliveryArea: dto.deliveryArea.trim(),
           emailVerifiedAt: null,
+          ...(dto.acceptTerms ? { termsAcceptedAt: new Date() } : {}),
           ...(referredById && !existingByPhone.referredById ? { referredById } : {}),
         },
       });
@@ -103,6 +104,7 @@ export class CustomerAuthService {
           email,
           passwordHash,
           deliveryArea: dto.deliveryArea.trim(),
+          termsAcceptedAt: dto.acceptTerms ? new Date() : null,
           referralCode: await generateUniqueReferralCode(this.prisma),
           referredById,
         },
@@ -304,6 +306,22 @@ export class CustomerAuthService {
     return this.toPublicCustomer(customer);
   }
 
+  /** Records that the customer accepted the Terms & Conditions (first time only). */
+  async acceptTerms(customerId: string) {
+    const existing = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+    });
+    if (!existing) {
+      throw new UnauthorizedException('Customer not found');
+    }
+    if (existing.termsAcceptedAt) return this.toPublicCustomer(existing);
+    const customer = await this.prisma.customer.update({
+      where: { id: customerId },
+      data: { termsAcceptedAt: new Date() },
+    });
+    return this.toPublicCustomer(customer);
+  }
+
   async removeAvatar(customerId: string) {
     await this.me(customerId);
     const customer = await this.prisma.customer.update({
@@ -409,6 +427,7 @@ export class CustomerAuthService {
       email: customer.email,
       deliveryArea: customer.deliveryArea,
       avatarUrl: customer.avatarUrl,
+      termsAcceptedAt: customer.termsAcceptedAt,
       emailVerified: !!customer.emailVerifiedAt,
     };
   }
