@@ -1,4 +1,12 @@
-import { IsString, IsEmail, IsOptional, MinLength, MaxLength, Matches } from 'class-validator';
+import {
+  IsBoolean,
+  IsString,
+  IsEmail,
+  IsOptional,
+  MinLength,
+  MaxLength,
+  Matches,
+} from 'class-validator';
 
 const PHONE_PATTERN = /^[+]?[\d\s()-]{7,20}$/;
 const PASSWORD_PATTERN = /^(?=.*[A-Za-z])(?=.*\d).+$/;
@@ -32,6 +40,15 @@ export class RegisterCustomerDto {
   @IsString()
   @MaxLength(20)
   referralCode?: string;
+
+  /**
+   * True when the customer ticked "I agree to the Terms & Conditions".
+   * Optional so older app versions can still sign up; those customers are
+   * asked to accept after login instead.
+   */
+  @IsOptional()
+  @IsBoolean()
+  acceptTerms?: boolean;
 }
 
 export class LoginCustomerDto {

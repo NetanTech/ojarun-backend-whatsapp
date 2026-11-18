@@ -109,6 +109,13 @@ export class CustomerAuthController {
     return this.auth.setAvatar(customer.id, file);
   }
 
+  @Post('me/accept-terms')
+  @UseGuards(CustomerJwtAuthGuard)
+  @HttpCode(200)
+  acceptTerms(@CurrentCustomer() customer: AuthCustomer) {
+    return this.auth.acceptTerms(customer.id);
+  }
+
   @Delete('me/avatar')
   @UseGuards(CustomerJwtAuthGuard)
   removeAvatar(@CurrentCustomer() customer: AuthCustomer) {
