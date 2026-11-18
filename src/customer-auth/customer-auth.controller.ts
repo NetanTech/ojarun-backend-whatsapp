@@ -1,4 +1,16 @@
-import { Controller, Post, Get, Patch, Body, UseGuards, HttpCode } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Patch,
+  Delete,
+  Body,
+  UseGuards,
+  HttpCode,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { CustomerAuthService } from './customer-auth.service';
 import {
   RegisterCustomerDto,
@@ -13,6 +25,10 @@ import {
 } from './dto/customer-auth.dto';
 import { CustomerJwtAuthGuard } from './customer-jwt-auth.guard';
 import { CurrentCustomer, AuthCustomer } from './current-customer.decorator';
+
+// multer ships with @nestjs/platform-express (same approach as UploadController).
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const multer = require('multer');
 
 @Controller('customer-auth')
 export class CustomerAuthController {
@@ -73,6 +89,30 @@ export class CustomerAuthController {
     @Body() dto: UpdateCustomerProfileDto,
   ) {
     return this.auth.updateProfile(customer.id, dto);
+  }
+
+  @Post('me/avatar')
+  @UseGuards(CustomerJwtAuthGuard)
+  @HttpCode(200)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: multer.memoryStorage(),
+      // Slightly above the 2MB rule so the service returns a friendly message.
+      limits: { fileSize: 3 * 1024 * 1024 },
+    }),
+  )
+  setAvatar(
+    @CurrentCustomer() customer: AuthCustomer,
+    @UploadedFile()
+    file: { buffer: Buffer; mimetype: string; originalname: string; size: number } | undefined,
+  ) {
+    return this.auth.setAvatar(customer.id, file);
+  }
+
+  @Delete('me/avatar')
+  @UseGuards(CustomerJwtAuthGuard)
+  removeAvatar(@CurrentCustomer() customer: AuthCustomer) {
+    return this.auth.removeAvatar(customer.id);
   }
 
   @Post('change-password')

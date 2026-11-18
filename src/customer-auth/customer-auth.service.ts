@@ -11,6 +11,7 @@ import { Customer } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { RewardsService } from '../rewards/rewards.service';
+import { CloudinaryService } from '../upload/cloudinary.service';
 import { generateUniqueReferralCode } from '../common/referral-code.util';
 import {
   RegisterCustomerDto,
@@ -46,6 +47,7 @@ export class CustomerAuthService {
     private readonly config: ConfigService,
     private readonly email: EmailService,
     private readonly rewards: RewardsService,
+    private readonly cloudinary: CloudinaryService,
   ) {}
 
   async register(dto: RegisterCustomerDto) {
@@ -278,6 +280,42 @@ export class CustomerAuthService {
     return this.toPublicCustomer(customer);
   }
 
+  /** Uploads a new profile photo to Cloudinary and saves its URL. */
+  async setAvatar(
+    customerId: string,
+    file: { buffer: Buffer; mimetype: string; originalname: string; size: number } | undefined,
+  ) {
+    if (!file) {
+      throw new BadRequestException('Choose an image to upload.');
+    }
+    if (!CustomerAuthService.AVATAR_TYPES.includes(file.mimetype)) {
+      throw new BadRequestException('Use a JPG, PNG, GIF or WebP image.');
+    }
+    if (file.size > CustomerAuthService.AVATAR_MAX_BYTES) {
+      throw new BadRequestException('Image is too large. Max size is 2MB.');
+    }
+    await this.me(customerId); // 401s if the account is gone
+
+    const { url } = await this.cloudinary.uploadImage(file, 'ojarun/customers');
+    const customer = await this.prisma.customer.update({
+      where: { id: customerId },
+      data: { avatarUrl: url },
+    });
+    return this.toPublicCustomer(customer);
+  }
+
+  async removeAvatar(customerId: string) {
+    await this.me(customerId);
+    const customer = await this.prisma.customer.update({
+      where: { id: customerId },
+      data: { avatarUrl: null },
+    });
+    return this.toPublicCustomer(customer);
+  }
+
+  static readonly AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+  static readonly AVATAR_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+
   async updateProfile(customerId: string, dto: UpdateCustomerProfileDto) {
     const customer = await this.prisma.customer.findUnique({
       where: { id: customerId },
@@ -370,6 +408,7 @@ export class CustomerAuthService {
       phone: customer.whatsappNumber,
       email: customer.email,
       deliveryArea: customer.deliveryArea,
+      avatarUrl: customer.avatarUrl,
       emailVerified: !!customer.emailVerifiedAt,
     };
   }
