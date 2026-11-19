@@ -41,8 +41,12 @@ export class AiService {
   async chat(
     userMessage: string,
     history: ChatMessage[] = [],
-    customerContext: string | null = null,
+    rawCustomerContext: string | null = null,
+    /** Product list for the website chat, so the model uses real product names. */
+    catalog: string | null = null,
   ): Promise<AiChatResult | null> {
+    // Everything appended to the system prompt, already formatted.
+    const customerContext = this.buildPromptContext(rawCustomerContext, catalog);
     const provider = this.config.get<string>("ai.provider");
     const text = userMessage.trim().toUpperCase();
 
@@ -320,7 +324,32 @@ export class AiService {
 
     const withProtocol = `${base}${orderingProtocol}`;
     if (!customerContext) return withProtocol;
-    return `${withProtocol}\n\nWhat you remember about this returning customer from past conversations:\n${customerContext}\n\nUse this only where it's actually relevant — don't force it into every reply.`;
+    return `${withProtocol}\n\n${customerContext}`;
+  }
+
+  /** Formats the optional customer memory and product catalog for the system prompt. */
+  private buildPromptContext(
+    customerMemory: string | null,
+    catalog: string | null,
+  ): string | null {
+    const parts: string[] = [];
+    if (customerMemory) {
+      parts.push(
+        `What you remember about this returning customer from past conversations:\n${customerMemory}\n\nUse this only where it's actually relevant — don't force it into every reply.`,
+      );
+    }
+    if (catalog) {
+      parts.push(
+        `Products Ojarun sells right now (name | unit | price):\n${catalog}\n\n` +
+          `Product rules:\n` +
+          `- In update_order_items, always use the exact product name from this list.\n` +
+          `- If the customer's word could mean more than one product (e.g. "pepper", "garri", "rice", "oil"), ask which one they want before adding it, and name the options.\n` +
+          `- Understand everyday names: e.g. "spinach" or "efo" means Efo Leaves, "tomato" means Fresh Tomatoes, "ata rodo" or "scotch bonnet" means Fresh Pepper (Ata Rodo).\n` +
+          `- If nothing on the list matches, say we don't sell it yet and suggest the closest item if there is one. Never add items that aren't on the list.\n` +
+          `- Quote prices only from this list; never make one up.`,
+      );
+    }
+    return parts.length ? parts.join("\n\n") : null;
   }
 
   // ============== TOOLS ==============
