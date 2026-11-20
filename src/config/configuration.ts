@@ -122,6 +122,16 @@ Your job each turn:
     fallbackFeeNaira: parseInt(process.env.DELIVERY_FALLBACK_FEE ?? '700', 10),
     // Pins farther than this from Bodija are rejected (out of service area).
     maxKm: parseFloat(process.env.DELIVERY_MAX_KM ?? '35'),
+    // Launch offer: percent off the delivery fee on each customer's first
+    // maxOrders non-cancelled orders placed between start and end (end is
+    // exclusive). Defaults: 30% on the first 3 orders, 23 Nov – 22 Dec 2026,
+    // Nigeria time. Set DELIVERY_PROMO_PERCENT=0 to switch it off.
+    launchPromo: {
+      percent: parseFloat(process.env.DELIVERY_PROMO_PERCENT ?? '30'),
+      maxOrders: parseInt(process.env.DELIVERY_PROMO_MAX_ORDERS ?? '3', 10),
+      start: process.env.DELIVERY_PROMO_START ?? '2026-11-23T00:00:00+01:00',
+      end: process.env.DELIVERY_PROMO_END ?? '2026-12-23T00:00:00+01:00',
+    },
   },
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME ?? '',

@@ -3,6 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { DeliveryPricingService } from './delivery-pricing.service';
 import { DeliveryQuoteDto } from './dto/delivery-quote.dto';
 import { CustomerJwtAuthGuard } from '../customer-auth/customer-jwt-auth.guard';
+import {
+  CurrentCustomer,
+  AuthCustomer,
+} from '../customer-auth/current-customer.decorator';
 import { IBADAN_AREA_COORDS } from './ibadan-areas.data';
 import { serviceFeeFor, serviceFeeRuleFrom } from '../common/service-fee.util';
 
@@ -34,15 +38,31 @@ export class DeliveryController {
    */
   @Post('quote')
   @HttpCode(200)
-  async quote(@Body() dto: DeliveryQuoteDto) {
+  async quote(
+    @Body() dto: DeliveryQuoteDto,
+    @CurrentCustomer() customer: AuthCustomer,
+  ) {
     const quote = await this.pricing.quoteForCoords(
       dto.lat,
       dto.lng,
       dto.deliveryAddress ?? '',
     );
+    // Same launch-offer check that createFromWeb uses, so the preview matches
+    // what the order will be charged.
+    const launch = await this.pricing.launchDiscountFor(customer.id);
 
     return {
-      deliveryFee: quote.fee,
+      deliveryFee: launch
+        ? this.pricing.discountedFee(quote.fee, launch.percent)
+        : quote.fee,
+      launchDiscount: launch
+        ? {
+            percent: launch.percent,
+            originalFee: quote.fee,
+            orderNumber: launch.orderNumber,
+            maxOrders: launch.maxOrders,
+          }
+        : null,
       // For the given cart value (first band if none sent). The website
       // recomputes it from serviceFeeRule as the cart changes.
       serviceFee: serviceFeeFor(dto.subtotal ?? 0, serviceFeeRuleFrom(this.config)),

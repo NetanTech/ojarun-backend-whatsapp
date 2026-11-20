@@ -1446,7 +1446,11 @@ export class WebhooksController {
       return;
     }
 
-    const deliveryFee = deliveryQuote.fee;
+    // Launch offer, same rule as website orders.
+    const launchDiscount = await this.deliveryPricing.launchDiscountFor(customerId);
+    const deliveryFee = launchDiscount
+      ? this.deliveryPricing.discountedFee(deliveryQuote.fee, launchDiscount.percent)
+      : deliveryQuote.fee;
     // Tiered by items value, same rule as website orders.
     const serviceFee = serviceFeeFor(subtotalNaira, serviceFeeRuleFrom(this.config));
     const totalNaira = subtotalNaira + serviceFee + deliveryFee;
@@ -1574,6 +1578,9 @@ export class WebhooksController {
       if (deliveryQuote.distanceKm != null) {
         customerInvoiceReceipt += ` (${deliveryQuote.distanceKm.toFixed(1)}km from ${this.deliveryPricing.originName})`;
       }
+      if (launchDiscount) {
+        customerInvoiceReceipt += `\n🎉 ${launchDiscount.percent}% launch discount on delivery (was ₦${deliveryQuote.fee.toLocaleString("en-NG")}, order ${launchDiscount.orderNumber} of ${launchDiscount.maxOrders})`;
+      }
       customerInvoiceReceipt += `\n*Total:* ₦${totalNaira.toLocaleString("en-NG")}`;
       if (deliveryQuote.estimated) {
         customerInvoiceReceipt += `\n_Delivery is an estimate — we'll confirm once our rider has your exact spot._`;
@@ -1683,10 +1690,17 @@ export class WebhooksController {
     });
 
     const draft = await this.getSanitizedDraft(conversationId);
+    const launchDiscount = await this.deliveryPricing.launchDiscountFor(customerId);
+    const shownFee = launchDiscount
+      ? this.deliveryPricing.discountedFee(quote.fee, launchDiscount.percent)
+      : quote.fee;
     let reply = `📍 *Location saved*\n${formatted}\n`;
-    reply += `Delivery: *₦${quote.fee.toLocaleString()}*`;
+    reply += `Delivery: *₦${shownFee.toLocaleString()}*`;
     if (quote.distanceKm != null) {
       reply += ` (~${quote.distanceKm} km from Bodija)`;
+    }
+    if (launchDiscount) {
+      reply += `\n🎉 ${launchDiscount.percent}% launch discount (was ₦${quote.fee.toLocaleString()})`;
     }
     reply += `\n`;
 
