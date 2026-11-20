@@ -16,6 +16,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { RewardsService } from '../rewards/rewards.service';
 import { DeliveryPricingService } from '../delivery/delivery-pricing.service';
 import { AssignmentsService } from '../assignments/assignments.service';
+import { serviceFeeFor, serviceFeeRuleFrom } from '../common/service-fee.util';
 import { AuthAdmin } from '../auth/current-admin.decorator';
 import {
   CreateOrderDto,
@@ -23,7 +24,7 @@ import {
   UpdateOrderStatusDto,
 } from './dto/order.dto';
 
-// The shopper/service fee is config-driven (fees.serviceFeeNaira) and applies
+// The shopper/service fee is tiered by cart value (common/service-fee.util) and applies
 // to WhatsApp and web alike. The checkout UI must display the same figure
 // (src/app/(Marketplace)/checkout/components/OrderSummary.tsx) so the amount
 // charged always matches what the customer was shown. Delivery is no longer
@@ -46,8 +47,9 @@ export class OrdersService {
     private readonly assignments: AssignmentsService,
   ) {}
 
-  private get serviceFeeNaira(): number {
-    return this.config.get<number>('fees.serviceFeeNaira') ?? 1200;
+  /** Tiered service fee for an items subtotal (see common/service-fee.util). */
+  private serviceFeeFor(subtotal: number): number {
+    return serviceFeeFor(subtotal, serviceFeeRuleFrom(this.config));
   }
 
   /** Creates a real order from the web checkout for a logged-in customer. */
@@ -114,7 +116,8 @@ export class OrdersService {
       );
     }
     const deliveryFee = deliveryQuote.fee;
-    const serviceFee = this.serviceFeeNaira;
+    // Based on the items' value before any promo discount.
+    const serviceFee = this.serviceFeeFor(subtotal);
 
     const total = Math.max(
       subtotal + serviceFee + deliveryFee - discountAmount,

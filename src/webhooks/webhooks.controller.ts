@@ -48,6 +48,7 @@ import {
   quoteQuantityPrompt,
 } from "./live-price.util";
 import { generateUniqueReferralCode } from "../common/referral-code.util";
+import { serviceFeeFor, serviceFeeRuleFrom } from "../common/service-fee.util";
 import { randomBytes } from "crypto";
 
 // Deterministic safety net: tool-calling isn't 100% reliable across every
@@ -1446,7 +1447,8 @@ export class WebhooksController {
     }
 
     const deliveryFee = deliveryQuote.fee;
-    const serviceFee = this.config.get<number>("fees.serviceFeeNaira") ?? 1200;
+    // Tiered by items value, same rule as website orders.
+    const serviceFee = serviceFeeFor(subtotalNaira, serviceFeeRuleFrom(this.config));
     const totalNaira = subtotalNaira + serviceFee + deliveryFee;
     const allPriced = pricedItems.every((item) => item.unitPrice > 0);
     const paystackRef = `oja_${randomBytes(8).toString("hex")}`;

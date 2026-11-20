@@ -74,10 +74,12 @@ Your job each turn:
   fees: {
     // Shopper/service fee. Charged on every order regardless of the channel it
     // came through, so WhatsApp and web quote the same price for the same cart.
-    serviceFeeNaira: parseInt(
-      process.env.SERVICE_FEE_NAIRA ?? process.env.AGENT_FEE_NAIRA ?? '1200',
-      10,
-    ),
+    // Tiered by cart value: perBand naira for every bandSize naira of items,
+    // bands starting at bandSize + edge (15,100, 30,100…). See
+    // src/common/service-fee.util.ts. Replaces the old flat SERVICE_FEE_NAIRA.
+    serviceFeePerBandNaira: parseInt(process.env.SERVICE_FEE_PER_BAND ?? '1500', 10),
+    serviceFeeBandNaira: parseInt(process.env.SERVICE_FEE_BAND ?? '15000', 10),
+    serviceFeeBandEdgeNaira: parseInt(process.env.SERVICE_FEE_BAND_EDGE ?? '100', 10),
   },
   google: {
     mapsApiKey:
