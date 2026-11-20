@@ -115,7 +115,11 @@ export class OrdersService {
         'We only deliver within Ibadan for now. Move the pin to your drop-off point inside Ibadan.',
       );
     }
-    const deliveryFee = deliveryQuote.fee;
+    // Launch offer (e.g. 30% off delivery on a customer's first 3 orders).
+    const launchDiscount = await this.deliveryPricing.launchDiscountFor(customerId);
+    const deliveryFee = launchDiscount
+      ? this.deliveryPricing.discountedFee(deliveryQuote.fee, launchDiscount.percent)
+      : deliveryQuote.fee;
     // Based on the items' value before any promo discount.
     const serviceFee = this.serviceFeeFor(subtotal);
 

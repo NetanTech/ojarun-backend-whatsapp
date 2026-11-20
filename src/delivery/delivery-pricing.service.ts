@@ -4,7 +4,7 @@ import { AddressValidationService } from './address-validation.service';
 import { matchIbadanArea } from './ibadan-areas.util';
 import { OrsClient } from './ors.client';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma } from '@prisma/client';
+import { OrderStatus, Prisma } from '@prisma/client';
 
 export interface DeliveryQuote {
   /** Naira amount to add to the order total. */
@@ -54,6 +54,39 @@ export class DeliveryPricingService {
       roundTo: this.config.get<number>('delivery.roundToNaira') ?? 50,
       fallbackFee: this.config.get<number>('delivery.fallbackFeeNaira') ?? 700,
     };
+  }
+
+  /**
+   * Launch delivery discount for this customer's next order, or null.
+   * Applies inside the promo window to their first `maxOrders` orders placed
+   * since it started (website and WhatsApp), not counting cancelled ones.
+   */
+  async launchDiscountFor(
+    customerId: string,
+    now: Date = new Date(),
+  ): Promise<{ percent: number; orderNumber: number; maxOrders: number } | null> {
+    const percent = this.config.get<number>('delivery.launchPromo.percent') ?? 0;
+    const maxOrders = this.config.get<number>('delivery.launchPromo.maxOrders') ?? 0;
+    const start = new Date(this.config.get<string>('delivery.launchPromo.start') ?? '');
+    const end = new Date(this.config.get<string>('delivery.launchPromo.end') ?? '');
+    if (!(percent > 0) || !(maxOrders > 0)) return null;
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+    if (now < start || now >= end) return null;
+
+    const used = await this.prisma.order.count({
+      where: {
+        customerId,
+        createdAt: { gte: start },
+        status: { not: OrderStatus.cancelled },
+      },
+    });
+    if (used >= maxOrders) return null;
+    return { percent, orderNumber: used + 1, maxOrders };
+  }
+
+  /** Delivery fee after a percentage discount, to the nearest naira. */
+  discountedFee(fee: number, percent: number): number {
+    return Math.max(0, Math.round((fee * (100 - percent)) / 100));
   }
 
   get originName(): string {
