@@ -4,6 +4,7 @@ import { DeliveryPricingService } from './delivery-pricing.service';
 import { DeliveryQuoteDto } from './dto/delivery-quote.dto';
 import { CustomerJwtAuthGuard } from '../customer-auth/customer-jwt-auth.guard';
 import { IBADAN_AREA_COORDS } from './ibadan-areas.data';
+import { serviceFeeFor, serviceFeeRuleFrom } from '../common/service-fee.util';
 
 @Controller('delivery')
 @UseGuards(CustomerJwtAuthGuard)
@@ -42,7 +43,10 @@ export class DeliveryController {
 
     return {
       deliveryFee: quote.fee,
-      serviceFee: this.config.get<number>('fees.serviceFeeNaira') ?? 1200,
+      // For the given cart value (first band if none sent). The website
+      // recomputes it from serviceFeeRule as the cart changes.
+      serviceFee: serviceFeeFor(dto.subtotal ?? 0, serviceFeeRuleFrom(this.config)),
+      serviceFeeRule: serviceFeeRuleFrom(this.config),
       distanceKm: quote.distanceKm,
       lat: quote.lat,
       lng: quote.lng,

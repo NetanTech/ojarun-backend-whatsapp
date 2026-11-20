@@ -31,4 +31,11 @@ export class DeliveryQuoteDto {
   @MinLength(2)
   @MaxLength(500)
   deliveryAddress?: string;
+
+  /** Cart items value, so the response's serviceFee matches the tiered rule. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  subtotal?: number;
 }
