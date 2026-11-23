@@ -384,6 +384,7 @@ export class OrdersService {
     createdAt: Date;
     items: Array<{
       id: string;
+      productId: string | null;
       productNameSnapshot: string;
       unitSnapshot: string;
       unitPriceSnapshot: Prisma.Decimal;
@@ -393,6 +394,8 @@ export class OrdersService {
   }) {
     const items = order.items.map((item) => ({
       id: item.id,
+      // Lets the website's "Reorder" put the same product back in the cart.
+      productId: item.productId,
       name: item.productNameSnapshot,
       quantity: Number(item.quantity),
       unit: item.unitSnapshot,
@@ -658,7 +661,6 @@ export class OrdersService {
       const lineTotal = qty * unitPrice;
       return {
         id: item.id,
-        // Lets the website's "Reorder" put the same product back in the cart.
         productId: item.productId,
         name: item.productNameSnapshot,
         quantity: qty,
