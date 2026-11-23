@@ -80,6 +80,9 @@ Your job each turn:
     serviceFeePerBandNaira: parseInt(process.env.SERVICE_FEE_PER_BAND ?? '1500', 10),
     serviceFeeBandNaira: parseInt(process.env.SERVICE_FEE_BAND ?? '15000', 10),
     serviceFeeBandEdgeNaira: parseInt(process.env.SERVICE_FEE_BAND_EDGE ?? '100', 10),
+    // Smallest amount one line of a website order may come to (price ×
+    // quantity), so nobody orders e.g. a single ₦250 egg. 0 switches it off.
+    minLineTotalNaira: parseInt(process.env.MIN_LINE_TOTAL_NAIRA ?? '500', 10),
   },
   google: {
     mapsApiKey:
