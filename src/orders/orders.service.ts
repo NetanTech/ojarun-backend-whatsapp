@@ -83,6 +83,22 @@ export class OrdersService {
       };
     });
 
+    // ₦500 floor per line (price × quantity), checked on the server prices so
+    // it can't be bypassed. The website warns about these lines before submit.
+    const minLineTotal =
+      this.config.get<number>('fees.minLineTotalNaira') ?? 500;
+    if (minLineTotal > 0) {
+      const tooSmall = pricedItems.filter(
+        (item) => item.price > 0 && item.price * item.quantity < minLineTotal,
+      );
+      if (tooSmall.length) {
+        throw new BadRequestException(
+          `Each item must come to at least ₦${minLineTotal.toLocaleString('en-NG')}. ` +
+            `Please increase the quantity of: ${tooSmall.map((i) => i.name).join(', ')}.`,
+        );
+      }
+    }
+
     const subtotal = pricedItems.reduce(
       (sum, item) => sum + item.price * item.quantity,
       0,
@@ -628,6 +644,7 @@ export class OrdersService {
     customer: { name: string | null; whatsappNumber: string };
     items: Array<{
       id: string;
+      productId: string | null;
       productNameSnapshot: string;
       unitSnapshot: string;
       unitPriceSnapshot: Prisma.Decimal;
@@ -641,6 +658,8 @@ export class OrdersService {
       const lineTotal = qty * unitPrice;
       return {
         id: item.id,
+        // Lets the website's "Reorder" put the same product back in the cart.
+        productId: item.productId,
         name: item.productNameSnapshot,
         quantity: qty,
         unit: item.unitSnapshot,
