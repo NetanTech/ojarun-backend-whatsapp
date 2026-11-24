@@ -42,17 +42,18 @@ export class DeliveryPricingService {
 
   private get rates() {
     return {
-      originLat: this.config.get<number>('delivery.originLat') ?? 7.4359015,
-      originLng: this.config.get<number>('delivery.originLng') ?? 3.9157404,
+      originLat: this.config.get<number>('delivery.originLat') ?? 7.4503374,
+      originLng: this.config.get<number>('delivery.originLng') ?? 3.907946,
       originName:
-        this.config.get<string>('delivery.originName') ?? 'Bodija Market',
+        this.config.get<string>('delivery.originName') ?? 'UI Second Gate',
       roadFactor: this.config.get<number>('delivery.roadFactor') ?? 1.3,
+      flatFee: this.config.get<number>('delivery.flatFeeNaira') ?? 1300,
+      flatKm: this.config.get<number>('delivery.flatKm') ?? 4,
       baseFee: this.config.get<number>('delivery.baseFeeNaira') ?? 700,
-      baseKm: this.config.get<number>('delivery.baseKm') ?? 3,
-      perKm: this.config.get<number>('delivery.perKmNaira') ?? 150,
-      maxFee: this.config.get<number>('delivery.maxFeeNaira') ?? 3000,
+      perKm: this.config.get<number>('delivery.perKmNaira') ?? 190,
+      maxFee: this.config.get<number>('delivery.maxFeeNaira') ?? 0,
       roundTo: this.config.get<number>('delivery.roundToNaira') ?? 50,
-      fallbackFee: this.config.get<number>('delivery.fallbackFeeNaira') ?? 700,
+      fallbackFee: this.config.get<number>('delivery.fallbackFeeNaira') ?? 1300,
     };
   }
 
@@ -112,13 +113,18 @@ export class DeliveryPricingService {
     return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
-  /** Base fare covers the first baseKm; every km past that bills at perKm. */
+  /**
+   * Owner's formula: a flat fee up to flatKm; beyond that
+   * baseFee + perKm × the whole distance, rounded to the nearest roundTo,
+   * capped at maxFee only when one is set (0 = no cap).
+   * E.g. 3 km → 1,300; 8.1 km → 700 + 190 × 8.1 = 2,239 → 2,250.
+   */
   feeForDistanceKm(distanceKm: number): number {
-    const { baseFee, baseKm, perKm, maxFee, roundTo } = this.rates;
-    const billableKm = Math.max(0, distanceKm - baseKm);
-    const raw = baseFee + billableKm * perKm;
-    const rounded = Math.ceil(raw / roundTo) * roundTo;
-    return Math.min(rounded, maxFee);
+    const { flatFee, flatKm, baseFee, perKm, maxFee, roundTo } = this.rates;
+    if (distanceKm <= flatKm) return flatFee;
+    const raw = baseFee + distanceKm * perKm;
+    const rounded = roundTo > 0 ? Math.round(raw / roundTo) * roundTo : Math.round(raw);
+    return maxFee > 0 ? Math.min(rounded, maxFee) : rounded;
   }
 
   /** Road-adjusted distance from the origin market to a coordinate. */
@@ -133,11 +139,10 @@ export class DeliveryPricingService {
     const match = matchIbadanArea(address);
     if (!match) return null;
 
-    // roadKm is real driving distance precomputed at build time; only fall back
-    // to the straight-line estimate if an entry somehow lacks it.
-    const distanceKm =
-      match.area.roadKm ??
-      this.distanceFromOriginKm(match.area.lat, match.area.lng);
+    // The precomputed roadKm values were measured from the OLD origin (Bodija
+    // Market), so they no longer apply. Measure from the current origin, the
+    // same way a map pin is priced when road routing is unavailable.
+    const distanceKm = this.distanceFromOriginKm(match.area.lat, match.area.lng);
     return {
       fee: this.feeForDistanceKm(distanceKm),
       distanceKm,
@@ -145,7 +150,7 @@ export class DeliveryPricingService {
       lng: match.area.lng,
       formattedAddress: address,
       neighborhood: match.area.name,
-      estimated: false,
+      estimated: true,
       serviceable: true,
     };
   }
@@ -226,7 +231,7 @@ export class DeliveryPricingService {
   }
 
   /**
-   * Pin-first pricing: real road distance from Bodija to the customer's pin.
+   * Pin-first pricing: real road distance from the origin (UI Second Gate) to the customer's pin.
    * This is the only path web + WhatsApp should use for billing.
    */
   async quoteForCoords(

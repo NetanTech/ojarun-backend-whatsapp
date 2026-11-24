@@ -465,9 +465,9 @@ export class OrdersService {
         pickup: {
           name:
             this.config.get<string>('delivery.originName') ??
-            'Bodija Market, Ibadan',
-          lat: this.config.get<number>('delivery.originLat') ?? 7.4359015,
-          lng: this.config.get<number>('delivery.originLng') ?? 3.9157404,
+            'UI Second Gate, Ibadan',
+          lat: this.config.get<number>('delivery.originLat') ?? 7.4503374,
+          lng: this.config.get<number>('delivery.originLng') ?? 3.907946,
         },
         destination:
           order.deliveryLat != null && order.deliveryLng != null
