@@ -103,27 +103,31 @@ Your job each turn:
       process.env.ORS_TLS_INSECURE === 'true' ||
       (process.env.NODE_ENV ?? 'development') !== 'production',
   },
-  // Distance-based delivery pricing. Origin is Bodija Market, Ibadan — every
+  // Distance-based delivery pricing. Origin is UI Second Gate, Ibadan — every
   // fee is measured from there. Rates are env-tunable so pricing can change
   // without a code deploy.
   delivery: {
-    // Bodija Market, Ibadan North, as resolved by OpenStreetMap.
-    originLat: parseFloat(process.env.DELIVERY_ORIGIN_LAT ?? '7.4359015'),
-    originLng: parseFloat(process.env.DELIVERY_ORIGIN_LNG ?? '3.9157404'),
-    originName: process.env.DELIVERY_ORIGIN_NAME ?? 'Bodija Market, Ibadan',
+    // UI Second Gate (Agbowo side), Ibadan, from the owner's Google Maps pin.
+    originLat: parseFloat(process.env.DELIVERY_ORIGIN_LAT ?? '7.4503374'),
+    originLng: parseFloat(process.env.DELIVERY_ORIGIN_LNG ?? '3.907946'),
+    originName: process.env.DELIVERY_ORIGIN_NAME ?? 'UI Second Gate, Ibadan',
     // Straight-line km get multiplied by this to approximate road distance.
     roadFactor: parseFloat(process.env.DELIVERY_ROAD_FACTOR ?? '1.3'),
-    // Base fare covers everything inside baseKm; beyond that it's perKm.
+    // Owner's formula (Nov 2026): up to flatKm costs a flat flatFee; above
+    // that F = baseFee + perKm × distance (the whole distance), rounded to
+    // the nearest roundTo. E.g. 8.1 km: 700 + 190 × 8.1 = 2,239 → ₦2,250.
+    flatFeeNaira: parseInt(process.env.DELIVERY_FLAT_FEE ?? '1300', 10),
+    flatKm: parseFloat(process.env.DELIVERY_FLAT_KM ?? '4'),
     baseFeeNaira: parseInt(process.env.DELIVERY_BASE_FEE ?? '700', 10),
-    baseKm: parseFloat(process.env.DELIVERY_BASE_KM ?? '3'),
-    perKmNaira: parseInt(process.env.DELIVERY_PER_KM ?? '150', 10),
-    maxFeeNaira: parseInt(process.env.DELIVERY_MAX_FEE ?? '3000', 10),
-    // Fees are rounded up to a clean note so riders aren't handling change.
+    perKmNaira: parseInt(process.env.DELIVERY_PER_KM ?? '190', 10),
+    // 0 = no maximum (the owner removed the old ₦3,000 cap).
+    maxFeeNaira: parseInt(process.env.DELIVERY_MAX_FEE ?? '0', 10),
+    // Fees are rounded to the nearest clean note so riders aren't handling change.
     roundToNaira: parseInt(process.env.DELIVERY_ROUND_TO ?? '50', 10),
-    // Charged when we can't geocode the address (no key, API down, vague
-    // landmark). Matches the old flat fee so nobody is over-charged blindly.
-    fallbackFeeNaira: parseInt(process.env.DELIVERY_FALLBACK_FEE ?? '700', 10),
-    // Pins farther than this from Bodija are rejected (out of service area).
+    // Charged when we can't place the address at all (vague landmark, map
+    // service down). Same as the flat short-trip fee.
+    fallbackFeeNaira: parseInt(process.env.DELIVERY_FALLBACK_FEE ?? '1300', 10),
+    // Pins farther than this from the origin are rejected (out of service area).
     maxKm: parseFloat(process.env.DELIVERY_MAX_KM ?? '35'),
     // Launch offer: percent off the delivery fee on each customer's first
     // maxOrders non-cancelled orders placed between start and end (end is

@@ -1697,7 +1697,7 @@ export class WebhooksController {
     let reply = `📍 *Location saved*\n${formatted}\n`;
     reply += `Delivery: *₦${shownFee.toLocaleString()}*`;
     if (quote.distanceKm != null) {
-      reply += ` (~${quote.distanceKm} km from Bodija)`;
+      reply += ` (~${quote.distanceKm} km from ${this.deliveryPricing.originName.replace(/,.*$/, "")})`;
     }
     if (launchDiscount) {
       reply += `\n🎉 ${launchDiscount.percent}% launch discount (was ₦${quote.fee.toLocaleString()})`;
