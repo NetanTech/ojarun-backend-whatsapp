@@ -1112,7 +1112,7 @@ export class WebhooksController {
 
     if (replyKey === "order_prompt") {
       const { window, day } = getDeliveryWindow();
-      staticMessageBody += `\n\n📦 Delivery window for orders now is *${window} ${day}*.`;
+      staticMessageBody += `\n\n📦 Orders placed now are scheduled for *${window} ${day}*.`;
     }
 
     await this.sendAndLog(
