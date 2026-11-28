@@ -312,6 +312,9 @@ model Order {
   deliveryLat        Float?           @map("delivery_lat")
   deliveryLng        Float?           @map("delivery_lng")
   customerNotes     String?           @map("customer_notes")
+  // Delivery run the customer chose (9 am / 12 pm / 3 pm / 6 pm WAT), or the
+  // earliest run allowed when they didn't pick. Null for older orders.
+  deliveryAt        DateTime?         @map("delivery_at") @db.Timestamptz(6)
   paystackReference String?           @unique @map("paystack_reference")
   paymentUrl        String?           @map("payment_url")
   paidAt            DateTime?         @map("paid_at") @db.Timestamptz(6)
@@ -331,6 +334,7 @@ model Order {
   @@index([status])
   @@index([paymentStatus])
   @@index([promoCodeId])
+  @@index([deliveryAt])
   @@map("orders")
 }
 
@@ -471,6 +475,8 @@ model ChatSession {
   draftItems               Json?             @map("draft_items")
   draftDeliveryAddress     String?           @map("draft_delivery_address")
   draftDeliveryAddressMeta Json?
+  // WhatsApp "when should we deliver?" prompt: { promptedAt, runs: ISO[] }.
+  deliveryPrompt           Json?             @map("delivery_prompt")
   messages                 Message[]
 
   @@index([customerId, status])
