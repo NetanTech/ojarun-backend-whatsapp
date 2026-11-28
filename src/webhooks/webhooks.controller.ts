@@ -19,7 +19,14 @@ import {
 import { PrismaService } from "../prisma/prisma.service";
 import { WhatsappService } from "../whatsapp/whatsapp.service";
 import { WhatsappSignatureGuard } from "./signature.guard";
-import { getDeliveryWindow, explainDeliveryTiming, looksLikeDeliveryTimingQuestion } from "./delivery.util";
+import {
+  getDeliveryWindow,
+  explainDeliveryTiming,
+  looksLikeDeliveryTimingQuestion,
+  getDeliveryRuns,
+  resolveDeliveryRun,
+  DeliveryRun,
+} from "./delivery.util";
 import { AiService, AiChatResult, OrderDraftItem } from "./ai.service";
 import { ConversationService } from "./conversation.service";
 import { EmailService } from "../email/email.service";
@@ -895,6 +902,20 @@ export class WebhooksController {
       return;
     }
 
+    // Answer to "when should we deliver?" — a number from the list or a time
+    // like "3pm tomorrow". Only checked right after that question was asked,
+    // so bare numbers elsewhere (quantities) are untouched.
+    if (
+      await this.handleDeliveryTimeReply(
+        customer.id,
+        conversation.id,
+        whatsappNumber,
+        processedText,
+      )
+    ) {
+      return;
+    }
+
     if (looksLikeRepeatList(processedText)) {
       await this.replyWithCurrentList(
         customer.id,
@@ -1112,7 +1133,7 @@ export class WebhooksController {
 
     if (replyKey === "order_prompt") {
       const { window, day } = getDeliveryWindow();
-      staticMessageBody += `\n\n📦 Orders placed now are scheduled for *${window} ${day}*.`;
+      staticMessageBody += `\n\n📦 Earliest delivery for orders placed now: *${window} ${day}*. You can pick a later time when you confirm.`;
     }
 
     await this.sendAndLog(
@@ -1376,10 +1397,102 @@ export class WebhooksController {
     }
   }
 
+  /** Ask which run to deliver on and remember the numbered options. */
+  private async askDeliveryTime(
+    customerId: string,
+    conversationId: string,
+    whatsappNumber: string,
+  ): Promise<void> {
+    const runs = getDeliveryRuns();
+    await this.conversations.setDeliveryPrompt(
+      conversationId,
+      runs.map((r) => r.at),
+    );
+    const lines = runs
+      .map((r, i) => `${i + 1}. ${r.label}${i === 0 ? " _(earliest)_" : ""}`)
+      .join("\n");
+    await this.sendAndLog(
+      customerId,
+      conversationId,
+      whatsappNumber,
+      `🚴 *When should we deliver?*\n\n${lines}\n\nReply with the number, or say *"that's all"* again for the earliest (${runs[0].label}).`,
+    );
+  }
+
+  /**
+   * Handles a reply to askDeliveryTime. Returns true when the message was a
+   * delivery-time answer (and has been dealt with).
+   */
+  private async handleDeliveryTimeReply(
+    customerId: string,
+    conversationId: string,
+    whatsappNumber: string,
+    text: string,
+  ): Promise<boolean> {
+    const t = text.trim().toLowerCase().replace(/\s+/g, " ");
+    const numberMatch = t.match(/^(?:option\s*)?#?(\d{1,2})[.)]?$/);
+    const timeMatch = t.match(
+      /^(?:at\s+)?(\d{1,2})\s*(am|pm)(?:\s+(today|tomorrow|tmrw|tmr))?$/,
+    );
+    if (!numberMatch && !timeMatch) return false;
+
+    const offered = await this.conversations.getDeliveryPrompt(conversationId);
+    if (!offered || offered.length === 0) return false;
+
+    let picked: string | undefined;
+    if (numberMatch) {
+      const n = Number(numberMatch[1]);
+      if (n < 1 || n > offered.length) {
+        await this.sendAndLog(
+          customerId,
+          conversationId,
+          whatsappNumber,
+          `Please reply with a number from 1 to ${offered.length}, or say *"that's all"* for the earliest time.`,
+        );
+        return true;
+      }
+      picked = offered[n - 1];
+    } else if (timeMatch) {
+      const wantedTime = `${Number(timeMatch[1])} ${timeMatch[2]}`;
+      const wantedDay = timeMatch[3]
+        ? timeMatch[3] === "today"
+          ? "today"
+          : "tomorrow"
+        : null;
+      // Only runs that were offered (and are still open) can match.
+      const match = getDeliveryRuns().find(
+        (r) =>
+          r.time === wantedTime &&
+          (!wantedDay || r.day === wantedDay) &&
+          offered.includes(r.at.toISOString()),
+      );
+      if (!match) {
+        await this.sendAndLog(
+          customerId,
+          conversationId,
+          whatsappNumber,
+          `There's no ${wantedTime}${wantedDay ? ` ${wantedDay}` : ""} run you can still pick. Please reply with a number from the list.`,
+        );
+        return true;
+      }
+      picked = match.at.toISOString();
+    }
+
+    await this.confirmOrder(
+      customerId,
+      conversationId,
+      whatsappNumber,
+      new Date(picked!),
+    );
+    return true;
+  }
+
   private async confirmOrder(
     customerId: string,
     conversationId: string,
     whatsappNumber: string,
+    /** Run picked from the "when should we deliver?" list, if any. */
+    chosenRun?: Date,
   ): Promise<void> {
     // Always read the sanitized draft here — this is the point where an
     // order is actually created, so junk line items (from a mis-parsed
@@ -1446,6 +1559,21 @@ export class WebhooksController {
       return;
     }
 
+    // Delivery time: ask once, then use the pick (or the earliest run if the
+    // customer just confirms again without picking).
+    let deliveryRun: DeliveryRun;
+    let runFellBack = false;
+    if (chosenRun) {
+      const resolved = resolveDeliveryRun(chosenRun);
+      deliveryRun = resolved.run;
+      runFellBack = !resolved.honoured;
+    } else if (await this.conversations.getDeliveryPrompt(conversationId)) {
+      deliveryRun = resolveDeliveryRun(null).run;
+    } else {
+      await this.askDeliveryTime(customerId, conversationId, whatsappNumber);
+      return;
+    }
+
     // Launch offer, same rule as website orders.
     const launchDiscount = await this.deliveryPricing.launchDiscountFor(customerId);
     const deliveryFee = launchDiscount
@@ -1485,6 +1613,7 @@ export class WebhooksController {
           deliveryLat: deliveryQuote.lat,
           deliveryLng: deliveryQuote.lng,
           customerNotes: finalAddress,
+          deliveryAt: deliveryRun.at,
           paystackReference: paystackRef,
         },
       });
@@ -1556,7 +1685,6 @@ export class WebhooksController {
       );
     }
 
-    const { window, day } = getDeliveryWindow();
     let customerInvoiceReceipt = `All set. I have compiled your OjaRun market order list:\n\n`;
     pricedItems.forEach((item) => {
       const priceBit =
@@ -1569,7 +1697,10 @@ export class WebhooksController {
     if (addressInfo.neighborhood) {
       customerInvoiceReceipt += `\n📍 *Area:* ${addressInfo.neighborhood}`;
     }
-    customerInvoiceReceipt += `\n🚴 *Delivery Schedule:* ${window} ${day}`;
+    customerInvoiceReceipt += `\n🚴 *Delivery Schedule:* ${deliveryRun.label} (${deliveryRun.dateLabel})`;
+    if (runFellBack) {
+      customerInvoiceReceipt += `\n_The time you picked has passed its cutoff, so we booked the earliest run._`;
+    }
 
     if (allPriced && subtotalNaira >= 1) {
       customerInvoiceReceipt += `\n\n💰 *Subtotal:* ₦${subtotalNaira.toLocaleString("en-NG")}`;

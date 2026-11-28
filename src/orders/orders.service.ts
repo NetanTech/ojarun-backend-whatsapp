@@ -18,6 +18,7 @@ import { DeliveryPricingService } from '../delivery/delivery-pricing.service';
 import { AssignmentsService } from '../assignments/assignments.service';
 import { serviceFeeFor, serviceFeeRuleFrom } from '../common/service-fee.util';
 import { AuthAdmin } from '../auth/current-admin.decorator';
+import { formatRun, resolveDeliveryRun } from '../webhooks/delivery.util';
 import {
   CreateOrderDto,
   ListOrdersQueryDto,
@@ -144,6 +145,9 @@ export class OrdersService {
       0,
     );
     const paystackRef = `oja_${randomBytes(8).toString('hex')}`;
+    // Taken at the moment of ordering, so a run that passed its cutoff while
+    // the customer sat on checkout falls back to the earliest one.
+    const { run: deliveryRun } = resolveDeliveryRun(dto.deliveryAt);
     const deliveryNote = dto.note
       ? `${dto.deliveryAddress}\n\nNote: ${dto.note}`
       : dto.deliveryAddress;
@@ -166,6 +170,7 @@ export class OrdersService {
           deliveryLat: deliveryQuote.lat,
           deliveryLng: deliveryQuote.lng,
           customerNotes: deliveryNote,
+          deliveryAt: deliveryRun.at,
           paystackReference: paystackRef,
           promoCodeId,
           discountAmount: new Prisma.Decimal(discountAmount.toFixed(2)),
@@ -380,6 +385,7 @@ export class OrdersService {
     discountAmount: Prisma.Decimal;
     cancelReason: string | null;
     customerNotes: string | null;
+    deliveryAt: Date | null;
     paymentUrl: string | null;
     createdAt: Date;
     items: Array<{
@@ -449,7 +455,10 @@ export class OrdersService {
       delivery: {
         method: 'Ojarun delivery',
         address: order.customerNotes || 'Not provided',
-        estimatedTime: 'To be confirmed',
+        estimatedTime: order.deliveryAt
+          ? formatRun(order.deliveryAt)
+          : 'To be confirmed',
+        deliveryAt: order.deliveryAt,
       },
       timeline: {
         orderReceived: true,
@@ -508,6 +517,15 @@ export class OrdersService {
 
     if (query.status) {
       where.status = query.status;
+    }
+
+    if (query.deliveryAt) {
+      where.deliveryAt = new Date(query.deliveryAt);
+    } else if (query.deliveryDate) {
+      // A WAT calendar day (UTC+1): 00:00 WAT is 23:00 UTC the day before.
+      const start = new Date(`${query.deliveryDate}T00:00:00+01:00`);
+      const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+      where.deliveryAt = { gte: start, lt: end };
     }
 
     if (query.search?.trim()) {
@@ -611,6 +629,7 @@ export class OrdersService {
     total: Prisma.Decimal;
     createdAt: Date;
     customerNotes: string | null;
+    deliveryAt: Date | null;
     customer: { name: string | null; whatsappNumber: string };
     items: unknown[];
   }) {
@@ -627,6 +646,8 @@ export class OrdersService {
       customerName: order.customer.name,
       customerPhone: order.customer.whatsappNumber,
       deliveryAddress: order.customerNotes,
+      deliveryAt: order.deliveryAt,
+      deliveryRun: order.deliveryAt ? formatRun(order.deliveryAt) : null,
     };
   }
 
@@ -644,6 +665,7 @@ export class OrdersService {
     updatedAt: Date;
     channel: string;
     customerNotes: string | null;
+    deliveryAt: Date | null;
     customer: { name: string | null; whatsappNumber: string };
     items: Array<{
       id: string;
@@ -693,6 +715,8 @@ export class OrdersService {
       customerPhone: order.customer.whatsappNumber,
       deliveryMethod: 'Ojarun delivery',
       deliveryAddress: order.customerNotes || 'Not provided',
+      deliveryAt: order.deliveryAt,
+      deliveryRun: order.deliveryAt ? formatRun(order.deliveryAt) : null,
       itemsCount: orderItems.length,
       orderItems,
       subtotal,

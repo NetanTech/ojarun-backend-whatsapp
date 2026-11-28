@@ -101,6 +101,8 @@ export class ConversationService {
       data: {
         draftItems: merged as unknown as Prisma.InputJsonValue,
         draftDeliveryAddress: updatedAddress,
+        // The list changed, so ask for a delivery time again on confirm.
+        deliveryPrompt: Prisma.JsonNull,
       },
     });
 
@@ -122,7 +124,11 @@ export class ConversationService {
   async clearDraft(sessionId: string): Promise<void> {
     await this.prisma.chatSession.update({
       where: { id: sessionId },
-      data: { draftItems: Prisma.JsonNull, draftDeliveryAddress: null },
+      data: {
+        draftItems: Prisma.JsonNull,
+        draftDeliveryAddress: null,
+        deliveryPrompt: Prisma.JsonNull,
+      },
     });
   }
 
@@ -135,8 +141,43 @@ export class ConversationService {
         draftDeliveryAddress: null,
         draftDeliveryAddressMeta: Prisma.JsonNull,
         pendingItems: Prisma.JsonNull,
+        deliveryPrompt: Prisma.JsonNull,
       },
     });
+  }
+
+  // ===== DELIVERY TIME PROMPT =====
+
+  /** Remember which runs the bot just offered (numbered 1..n). */
+  async setDeliveryPrompt(sessionId: string, runs: Date[]): Promise<void> {
+    await this.prisma.chatSession.update({
+      where: { id: sessionId },
+      data: {
+        deliveryPrompt: {
+          promptedAt: new Date().toISOString(),
+          runs: runs.map((r) => r.toISOString()),
+        },
+      },
+    });
+  }
+
+  /** The runs offered, if the question was asked in the last `maxAgeMinutes`. */
+  async getDeliveryPrompt(
+    sessionId: string,
+    maxAgeMinutes = 30,
+  ): Promise<string[] | null> {
+    const session = await this.prisma.chatSession.findUnique({
+      where: { id: sessionId },
+      select: { deliveryPrompt: true },
+    });
+    const prompt = session?.deliveryPrompt as
+      | { promptedAt?: string; runs?: string[] }
+      | null
+      | undefined;
+    if (!prompt?.promptedAt || !Array.isArray(prompt.runs)) return null;
+    const ageMs = Date.now() - new Date(prompt.promptedAt).getTime();
+    if (!(ageMs >= 0 && ageMs <= maxAgeMinutes * 60_000)) return null;
+    return prompt.runs;
   }
 
   // ===== PENDING ITEMS METHODS =====
